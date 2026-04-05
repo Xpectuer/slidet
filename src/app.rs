@@ -21,6 +21,10 @@ pub struct App {
     pub mode: Mode,
     pub scroll: u16,
     pub should_quit: bool,
+    pub image: ImageContext,
+}
+
+pub struct ImageContext {
     pub image_picker: Option<Picker>,
     pub image_states: HashMap<PathBuf, StatefulProtocol>,
 }
@@ -37,8 +41,10 @@ impl App {
             mode: Mode::Browse,
             scroll: 0,
             should_quit: false,
-            image_picker,
-            image_states: HashMap::new(),
+            image: ImageContext {
+                image_picker,
+                image_states: HashMap::new(),
+            },
         }
     }
 
@@ -80,6 +86,12 @@ impl App {
     }
 
     pub fn image_state_for(&mut self, path: &Path) -> Result<&mut StatefulProtocol> {
+        self.image.image_state_for(path)
+    }
+}
+
+impl ImageContext {
+    pub fn image_state_for(&mut self, path: &Path) -> Result<&mut StatefulProtocol> {
         let cache_key = path.to_path_buf();
         if !self.image_states.contains_key(&cache_key) {
             let picker = self
@@ -98,11 +110,35 @@ impl App {
     }
 }
 
+impl crate::ui::ImageStateStore for ImageContext {
+    fn image_state_for(&mut self, path: &Path) -> Result<&mut StatefulProtocol> {
+        ImageContext::image_state_for(self, path)
+    }
+}
+
 pub fn run(terminal: &mut DefaultTerminal, slides: Vec<Slide>) -> Result<()> {
     let mut app = App::new(slides);
 
     while !app.should_quit {
-        terminal.draw(|frame| crate::ui::render(frame, &mut app))?;
+        terminal.draw(|frame| {
+            let (slides, selected, mode, scroll, image) = (
+                &app.slides,
+                app.selected,
+                app.mode,
+                app.scroll,
+                &mut app.image,
+            );
+            let model = crate::ui::RenderModel {
+                slides,
+                selected,
+                mode: match mode {
+                    Mode::Browse => crate::ui::RenderMode::Browse,
+                    Mode::Present => crate::ui::RenderMode::Present,
+                },
+                scroll,
+            };
+            crate::ui::render(frame, &model, image)
+        })?;
         if let Event::Key(key) = event::read()? {
             if key.kind == KeyEventKind::Press {
                 app.handle_key(key.code);
@@ -204,6 +240,6 @@ mod tests {
         app.image_state_for(&image_path).unwrap();
         app.image_state_for(&image_path).unwrap();
 
-        assert_eq!(app.image_states.len(), 1);
+        assert_eq!(app.image.image_states.len(), 1);
     }
 }

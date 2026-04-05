@@ -7,13 +7,31 @@ use ratatui::{
     DefaultTerminal, Frame,
 };
 use ratatui_image::{Resize, StatefulImage};
+use ratatui_image::protocol::StatefulProtocol;
+use std::path::Path;
 
 use crate::{
-    app::{App, Mode},
     image::{self, ImageRender},
     loader::Slide,
     markdown::{self, SlideBlock},
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderMode {
+    Browse,
+    Present,
+}
+
+pub struct RenderModel<'a> {
+    pub slides: &'a [Slide],
+    pub selected: usize,
+    pub mode: RenderMode,
+    pub scroll: u16,
+}
+
+pub trait ImageStateStore {
+    fn image_state_for(&mut self, path: &Path) -> Result<&mut StatefulProtocol>;
+}
 
 pub fn init_terminal() -> Result<DefaultTerminal> {
     Ok(ratatui::init())
@@ -24,25 +42,33 @@ pub fn restore_terminal() -> Result<()> {
     Ok(())
 }
 
-pub fn render(frame: &mut Frame, app: &mut App) {
-    match app.mode {
-        Mode::Browse => render_browse(frame, app),
-        Mode::Present => render_present(frame, app),
+pub fn render(
+    frame: &mut Frame,
+    model: &RenderModel<'_>,
+    image_states: &mut dyn ImageStateStore,
+) {
+    match model.mode {
+        RenderMode::Browse => render_browse(frame, model, image_states),
+        RenderMode::Present => render_present(frame, model, image_states),
     }
 }
 
-fn render_browse(frame: &mut Frame, app: &mut App) {
+fn render_browse(
+    frame: &mut Frame,
+    model: &RenderModel<'_>,
+    image_states: &mut dyn ImageStateStore,
+) {
     let areas = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(28), Constraint::Min(1)])
         .split(frame.area());
 
-    let nav = app
+    let nav = model
         .slides
         .iter()
         .enumerate()
         .map(|(idx, slide)| {
-            if idx == app.selected {
+            if idx == model.selected {
                 format!("> {}", slide.title)
             } else {
                 format!("  {}", slide.title)
@@ -56,21 +82,31 @@ fn render_browse(frame: &mut Frame, app: &mut App) {
         areas[0],
     );
 
-    let current = app.current_slide().clone();
+    let current = model.slides[model.selected].clone();
     let preview = Block::default()
         .title(current.title.clone())
         .borders(Borders::ALL);
     let inner = preview.inner(areas[1]);
     frame.render_widget(preview, areas[1]);
-    render_slide_blocks(frame, inner, app, &current);
+    render_slide_blocks(frame, inner, model, image_states, &current);
 }
 
-fn render_present(frame: &mut Frame, app: &mut App) {
-    let current = app.current_slide().clone();
-    render_slide_blocks(frame, frame.area(), app, &current);
+fn render_present(
+    frame: &mut Frame,
+    model: &RenderModel<'_>,
+    image_states: &mut dyn ImageStateStore,
+) {
+    let current = model.slides[model.selected].clone();
+    render_slide_blocks(frame, frame.area(), model, image_states, &current);
 }
 
-fn render_slide_blocks(frame: &mut Frame, area: Rect, app: &mut App, current: &Slide) {
+fn render_slide_blocks(
+    frame: &mut Frame,
+    area: Rect,
+    model: &RenderModel<'_>,
+    image_states: &mut dyn ImageStateStore,
+    current: &Slide,
+) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -79,7 +115,7 @@ fn render_slide_blocks(frame: &mut Frame, area: Rect, app: &mut App, current: &S
         .path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
-    let mut cursor_y = i32::from(area.y) - i32::from(app.scroll);
+    let mut cursor_y = i32::from(area.y) - i32::from(model.scroll);
 
     for block in markdown::parse_blocks(&current.raw_markdown) {
         let height = block_height(&block, area.width);
@@ -89,7 +125,7 @@ fn render_slide_blocks(frame: &mut Frame, area: Rect, app: &mut App, current: &S
                     render_markdown_block(frame, visible, &blocks, text_scroll);
                 }
                 SlideBlock::Image { src, .. } => {
-                    render_image_block(frame, visible, app, base_dir, &src);
+                    render_image_block(frame, visible, image_states, base_dir, &src);
                 }
             }
         }
@@ -323,12 +359,12 @@ fn estimate_text_height(text: &Text<'_>, width: u16) -> u16 {
 fn render_image_block(
     frame: &mut Frame,
     area: Rect,
-    app: &mut App,
+    image_states: &mut dyn ImageStateStore,
     base_dir: &std::path::Path,
     src: &str,
 ) {
     match image::prepare_image(base_dir, src) {
-        Ok(ImageRender::TerminalImage { path }) => match app.image_state_for(&path) {
+        Ok(ImageRender::TerminalImage { path }) => match image_states.image_state_for(&path) {
             Ok(state) => frame.render_stateful_widget(
                 StatefulImage::default().resize(Resize::Fit(None)),
                 area,
@@ -410,8 +446,11 @@ fn text_to_string(text: Text<'_>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::render;
-    use crate::{app::App, loader::Slide};
+    use super::{render, RenderMode, RenderModel};
+    use crate::{
+        app::{App, ImageContext},
+        loader::Slide,
+    };
     use ratatui::{backend::TestBackend, Terminal};
     use ratatui_image::picker::Picker;
     use std::{
@@ -460,13 +499,25 @@ mod tests {
             mode: crate::app::Mode::Browse,
             scroll: 0,
             should_quit: false,
-            image_picker: None,
-            image_states: std::collections::HashMap::new(),
+            image: ImageContext {
+                image_picker: None,
+                image_states: std::collections::HashMap::new(),
+            },
         };
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        terminal.draw(|frame| render(frame, &mut app)).unwrap();
+        terminal
+            .draw(|frame| {
+                let model = RenderModel {
+                    slides: &app.slides,
+                    selected: app.selected,
+                    mode: RenderMode::Browse,
+                    scroll: app.scroll,
+                };
+                render(frame, &model, &mut app.image)
+            })
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
         let screen = buffer
             .content()
@@ -500,13 +551,25 @@ mod tests {
             mode: crate::app::Mode::Browse,
             scroll: 0,
             should_quit: false,
-            image_picker: Some(Picker::from_fontsize((8, 16))),
-            image_states: std::collections::HashMap::new(),
+            image: ImageContext {
+                image_picker: Some(Picker::from_fontsize((8, 16))),
+                image_states: std::collections::HashMap::new(),
+            },
         };
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        terminal.draw(|frame| render(frame, &mut app)).unwrap();
+        terminal
+            .draw(|frame| {
+                let model = RenderModel {
+                    slides: &app.slides,
+                    selected: app.selected,
+                    mode: RenderMode::Browse,
+                    scroll: app.scroll,
+                };
+                render(frame, &model, &mut app.image)
+            })
+            .unwrap();
         let buffer = terminal.backend().buffer().clone();
         let screen = buffer
             .content()

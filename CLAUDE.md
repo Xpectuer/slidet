@@ -3,6 +3,16 @@
 This file provides guidance to AI coding assistants (Claude Code, Cursor, Windsurf, etc.)
 when working with code in this repository.
 
+## ⚠️ 重要：架构文档阅读要求
+
+**在进行任何 feature 修改或 debug 前，必须先阅读 [ARCHITECTURE.md](ARCHITECTURE.md)**
+
+这确保你了解：
+- 系统整体架构和数据流
+- 模块间的依赖关系
+- 关键路径和配置驱动逻辑
+- 已知限制和未来扩展点
+
 ## Project Overview
 
 `slidet` 是一个用 Rust 编写的终端 Markdown 幻灯片播放器。当前实现使用 `clap` 解析命令行参数，使用 `ratatui`/`crossterm` 渲染交互式 TUI，使用 `pulldown-cmark` 将每个 `.md` 文件解析为可展示的文本与图片块。
@@ -113,3 +123,21 @@ No rules defined yet. Add rules to `docs/rules/` and run `scripts/rebuild-indexe
 |--------|-------|
 | `scripts/fm.sh` | `fm.sh get <file> <field>` — frontmatter extraction |
 | `scripts/rebuild-indexes.sh` | `rebuild-indexes.sh --project-dir .` — regenerate all index.md |
+
+## 模块文档
+
+详细模块文档位于 `docs/modules/`:
+
+- **[模块文档索引](docs/modules/index.md)** - 所有模块的总索引、依赖关系图和全局接口索引
+- [loader 模块](docs/modules/loader.md) - 目录扫描和幻灯片加载
+- [markdown 模块](docs/modules/markdown.md) - Markdown 解析和结构化块模型
+- [image 模块](docs/modules/image.md) - 终端图片能力检测和降级策略
+- [app 模块](docs/modules/app.md) - 应用状态和事件循环
+- [ui 模块](docs/modules/ui.md) - Browse/Present 双模式渲染
+
+每个模块文档包含：
+- Interface：公开的函数、类型和 API
+- Dependency Graph：依赖的内部模块
+- State Management：状态管理方式
+- Edge Cases：硬编码值和错误处理
+- Usage Example：使用示例
