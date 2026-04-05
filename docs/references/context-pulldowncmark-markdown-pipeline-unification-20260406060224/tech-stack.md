@@ -1,3 +1,8 @@
+# Tech Stack Snapshot
+
+- `Cargo.toml`
+
+```toml
 [package]
 name = "slidet"
 version = "0.1.0"
@@ -12,4 +17,6 @@ pulldown-cmark = "0.12"
 ratatui = "0.29"
 ratatui-image = "4"
 ratatui-core = "0.1"
+tui-markdown = { version = "0.3.7", features = ["highlight-code"] }
 unicode-width = "0.2"
+```

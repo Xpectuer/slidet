@@ -1,7 +1,9 @@
 use anyhow::Result;
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
-    widgets::{Block, Borders, Paragraph},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, Paragraph, Wrap},
     DefaultTerminal, Frame,
 };
 use ratatui_image::{Resize, StatefulImage};
@@ -80,11 +82,11 @@ fn render_slide_blocks(frame: &mut Frame, area: Rect, app: &mut App, current: &S
     let mut cursor_y = i32::from(area.y) - i32::from(app.scroll);
 
     for block in markdown::parse_blocks(&current.raw_markdown) {
-        let height = block_height(&block);
+        let height = block_height(&block, area.width);
         if let Some((visible, text_scroll)) = clip_rect(area, cursor_y, height) {
             match block {
-                SlideBlock::Text(text) => {
-                    frame.render_widget(Paragraph::new(text).scroll((text_scroll, 0)), visible);
+                SlideBlock::Markdown(blocks) => {
+                    render_markdown_block(frame, visible, &blocks, text_scroll);
                 }
                 SlideBlock::Image { src, .. } => {
                     render_image_block(frame, visible, app, base_dir, &src);
@@ -97,6 +99,225 @@ fn render_slide_blocks(frame: &mut Frame, area: Rect, app: &mut App, current: &S
             break;
         }
     }
+}
+
+fn render_markdown_block(
+    frame: &mut Frame,
+    area: Rect,
+    blocks: &[markdown::MarkdownBlock],
+    text_scroll: u16,
+) {
+    let rendered = render_markdown_text(blocks);
+    let paragraph = Paragraph::new(rendered)
+        .wrap(Wrap { trim: false })
+        .scroll((text_scroll, 0));
+    frame.render_widget(paragraph, area);
+}
+
+fn render_markdown_text(blocks: &[markdown::MarkdownBlock]) -> Text<'static> {
+    let mut lines = Vec::new();
+
+    for (idx, block) in blocks.iter().enumerate() {
+        push_block_lines(&mut lines, block, "");
+        if idx + 1 < blocks.len() && !line_is_blank(lines.last()) {
+            lines.push(Line::default());
+        }
+    }
+
+    while line_is_blank(lines.last()) {
+        lines.pop();
+    }
+
+    if lines.is_empty() {
+        lines.push(Line::default());
+    }
+
+    Text::from(lines)
+}
+
+fn push_block_lines(lines: &mut Vec<Line<'static>>, block: &markdown::MarkdownBlock, prefix: &str) {
+    match block {
+        markdown::MarkdownBlock::Heading { content, .. } => {
+            let mut line = Line::from(prefixed_spans(prefix, render_inline_spans(content)));
+            line.alignment = Some(Alignment::Center);
+            line.style = heading_style();
+            lines.push(line);
+        }
+        markdown::MarkdownBlock::Paragraph(content) => {
+            lines.push(Line::from(prefixed_spans(prefix, render_inline_spans(content))));
+        }
+        markdown::MarkdownBlock::BulletList(items) => {
+            for item in items {
+                push_list_item_lines(lines, item, prefix, None);
+            }
+        }
+        markdown::MarkdownBlock::OrderedList { start, items } => {
+            for (idx, item) in items.iter().enumerate() {
+                push_list_item_lines(lines, item, prefix, Some(format!("{}. ", start + idx)));
+            }
+        }
+        markdown::MarkdownBlock::Quote(blocks) => {
+            for (idx, block) in blocks.iter().enumerate() {
+                push_block_lines(lines, block, &format!("{prefix}> "));
+                if idx + 1 < blocks.len() && !line_is_blank(lines.last()) {
+                    lines.push(Line::default());
+                }
+            }
+        }
+        markdown::MarkdownBlock::CodeBlock { language, code } => {
+            if let Some(language) = language {
+                lines.push(Line::styled(
+                    format!("{prefix}[code:{language}]"),
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ));
+            }
+            for code_line in code.lines() {
+                lines.push(Line::styled(
+                    format!("{prefix}    {code_line}"),
+                    Style::default().fg(Color::Green),
+                ));
+            }
+        }
+        markdown::MarkdownBlock::Table(table) => {
+            lines.push(Line::from(format!("{prefix}> [table collapsed for terminal width]")));
+            for (row_idx, row) in table.rows.iter().enumerate() {
+                lines.push(Line::default());
+                lines.push(Line::styled(
+                    format!("{prefix}**Row {}**", row_idx + 1),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ));
+                for (col_idx, header) in table.headers.iter().enumerate() {
+                    let value = row
+                        .get(col_idx)
+                        .map(|cell| inline_plain_text(cell))
+                        .unwrap_or_default();
+                    lines.push(Line::from(format!(
+                        "{prefix}- {}: {}",
+                        inline_plain_text(header),
+                        value
+                    )));
+                }
+            }
+        }
+        markdown::MarkdownBlock::ThematicBreak => {
+            lines.push(Line::from(format!("{prefix}---")));
+        }
+    }
+}
+
+fn heading_style() -> Style {
+    Style::default()
+        .fg(Color::LightYellow)
+        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+}
+
+fn push_list_item_lines(
+    lines: &mut Vec<Line<'static>>,
+    item: &markdown::ListItem,
+    prefix: &str,
+    ordered_prefix: Option<String>,
+) {
+    let list_prefix = ordered_prefix.unwrap_or_else(|| match item.checked {
+        Some(true) => String::from("- [x] "),
+        Some(false) => String::from("- [ ] "),
+        None => String::from("- "),
+    });
+
+    if item.blocks.is_empty() {
+        lines.push(Line::from(format!("{prefix}{list_prefix}")));
+        return;
+    }
+
+    for (idx, block) in item.blocks.iter().enumerate() {
+        let item_prefix = if idx == 0 {
+            format!("{prefix}{list_prefix}")
+        } else {
+            format!("{prefix}{}", " ".repeat(list_prefix.chars().count()))
+        };
+        push_block_lines(lines, block, &item_prefix);
+    }
+}
+
+fn render_inline_spans(spans: &[markdown::InlineSpan]) -> Vec<Span<'static>> {
+    spans.iter().flat_map(render_inline_span).collect()
+}
+
+fn render_inline_span(span: &markdown::InlineSpan) -> Vec<Span<'static>> {
+    match span {
+        markdown::InlineSpan::Text(text) => vec![Span::raw(text.clone())],
+        markdown::InlineSpan::Strong(text) => {
+            vec![Span::styled(text.clone(), Style::default().add_modifier(Modifier::BOLD))]
+        }
+        markdown::InlineSpan::Emphasis(text) => {
+            vec![Span::styled(text.clone(), Style::default().add_modifier(Modifier::ITALIC))]
+        }
+        markdown::InlineSpan::Strikethrough(text) => vec![Span::styled(
+            text.clone(),
+            Style::default().add_modifier(Modifier::CROSSED_OUT),
+        )],
+        markdown::InlineSpan::Code(text) => vec![Span::styled(
+            text.clone(),
+            Style::default().fg(Color::Green).bg(Color::DarkGray),
+        )],
+        markdown::InlineSpan::Link { label, destination } => vec![
+            Span::styled(
+                label.clone(),
+                Style::default()
+                    .fg(Color::LightBlue)
+                    .add_modifier(Modifier::UNDERLINED),
+            ),
+            Span::raw(format!(" ({destination})")),
+        ],
+    }
+}
+
+fn prefixed_spans(prefix: &str, spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
+    let mut prefixed = Vec::with_capacity(spans.len() + 1);
+    if !prefix.is_empty() {
+        prefixed.push(Span::raw(prefix.to_string()));
+    }
+    prefixed.extend(spans);
+    prefixed
+}
+
+fn inline_plain_text(spans: &[markdown::InlineSpan]) -> String {
+    spans
+        .iter()
+        .map(|span| match span {
+            markdown::InlineSpan::Text(text)
+            | markdown::InlineSpan::Strong(text)
+            | markdown::InlineSpan::Emphasis(text)
+            | markdown::InlineSpan::Strikethrough(text)
+            | markdown::InlineSpan::Code(text) => text.clone(),
+            markdown::InlineSpan::Link { label, destination } => {
+                format!("{label} ({destination})")
+            }
+        })
+        .collect::<String>()
+}
+
+fn plain_line_text(line: &Line<'_>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>()
+}
+
+fn line_is_blank(line: Option<&Line<'_>>) -> bool {
+    line.is_none_or(|line| plain_line_text(line).trim().is_empty())
+}
+
+fn estimate_text_height(text: &Text<'_>, width: u16) -> u16 {
+    let width = width.max(1) as usize;
+    text.lines
+        .iter()
+        .map(|line| {
+            let plain = plain_line_text(line);
+            let display_width = unicode_width::UnicodeWidthStr::width(plain.as_str());
+            display_width.max(1).div_ceil(width) as u16
+        })
+        .sum::<u16>()
+        .max(1)
 }
 
 fn render_image_block(
@@ -122,9 +343,12 @@ fn render_image_block(
     }
 }
 
-fn block_height(block: &SlideBlock) -> u16 {
+fn block_height(block: &SlideBlock, width: u16) -> u16 {
     match block {
-        SlideBlock::Text(text) => text.lines().count().max(1) as u16,
+        SlideBlock::Markdown(blocks) => {
+            let rendered = render_markdown_text(blocks);
+            estimate_text_height(&rendered, width.max(1))
+        }
         SlideBlock::Image { .. } => 12,
     }
 }
@@ -160,7 +384,7 @@ pub fn render_slide_content(base_dir: Option<&std::path::Path>, raw_markdown: &s
     markdown::parse_blocks(raw_markdown)
         .into_iter()
         .map(|block| match block {
-            SlideBlock::Text(text) => text,
+            SlideBlock::Markdown(blocks) => text_to_string(render_markdown_text(&blocks)),
             SlideBlock::Image { src, .. } => {
                 let base = base_dir.unwrap_or_else(|| std::path::Path::new("."));
                 match image::prepare_image(base, &src) {
@@ -174,6 +398,14 @@ pub fn render_slide_content(base_dir: Option<&std::path::Path>, raw_markdown: &s
         })
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+fn text_to_string(text: Text<'_>) -> String {
+    text.lines
+        .into_iter()
+        .map(|line| plain_line_text(&line))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
