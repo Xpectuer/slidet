@@ -1,12 +1,12 @@
 ---
 title: "Intake Session Log"
 doc_type: proc
-status: active
+status: ready
 brief: "Q&A transcript for slidet image rendering support"
 confidence: speculative
 created: 2026-04-06
 updated: 2026-04-06
-revision: 1
+revision: 3
 context_ref: "docs/references/context-image-rendering-support-20260406013120/"
 ---
 
@@ -43,9 +43,32 @@ context_ref: "docs/references/context-image-rendering-support-20260406013120/"
 **Answer**: 1. Markdown 中的 `![alt](file.jpg|png)` 在支持图片的终端中可实际显示；`svg` 显示明确占位；缺失文件继续显示缺失提示；相关测试覆盖这三类情况。
 **Files Read**: `src/image.rs`, `src/markdown.rs`, `src/ui.rs`
 
+### Round 4
+**Category**: Testing
+**Question**: 首版图片渲染成功路径的自动化测试，你更希望采用哪种策略？
+**Answer**: 1. 提交最小图片 fixture 到仓库。
+**Files Read**: `docs/drafts/intake-image-rendering-support-20260406013120/spec.md`, `docs/drafts/intake-image-rendering-support-20260406013120/requirements.md`
+
+### Round 5
+**Category**: Compatibility
+**Question**: 首版验收里“支持图片显示的终端”应当如何界定？
+**Answer**: 1. 以当前能力探测命中的终端为准。
+**Files Read**: `docs/drafts/intake-image-rendering-support-20260406013120/spec.md`, `src/image.rs`
+
+### Round 6
+**Category**: Layout
+**Question**: 当终端很窄或可用区域很小时，首版图片显示规则你希望是哪一种？
+**Answer**: 1. 不设最小高度，按可用区域自然缩放。
+**Files Read**: `docs/drafts/intake-image-rendering-support-20260406013120/spec.md`, `src/ui.rs`
+
+### Round 7
+**Category**: Architecture
+**Question**: 最后这个开放问题，我建议现在就定成哪种边界？
+**Answer**: 1. `ratatui-image` 直接集成在 `ui.rs`。
+**Files Read**: `src/ui.rs`, `src/image.rs`, `src/app.rs`, `docs/drafts/intake-image-rendering-support-20260406013120/spec.md`
+
 ## Summary
-**Rounds**: 3
-**Stop Reason**: criteria met
+**Rounds**: 7
+**Stop Reason**: open question resolved
 **Gaps**:
-- 浏览模式与全屏模式下图片尺寸适配细节未展开，默认按首版最小实现处理。
-- 是否将 `jpeg` 扩展名显式纳入与 `jpg` 同等支持未单独确认，按常规图片支持范围推定为应包含。
+- 无。
