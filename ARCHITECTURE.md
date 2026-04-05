@@ -5,7 +5,7 @@ brief: 终端 Markdown 幻灯片播放器的系统架构概览
 confidence: verified
 created: 2026-04-06
 updated: 2026-04-06
-revision: 1
+revision: 2
 ---
 
 <!-- BEGIN:architecture -->
@@ -33,12 +33,12 @@ revision: 1
 
 **核心框架和库**:
 - `ratatui` (0.29): 终端 UI 框架
+- `ratatui-core` (0.1): Ratatui 核心组件
 - `crossterm` (0.28): 跨平台终端操作
-- `pulldown-cmark` (0.12): Markdown 解析
+- `pulldown-cmark` (0.12): Markdown 解析（唯一语义来源）
 - `clap` (4): 命令行参数解析
 - `image` (0.25): 图片处理
 - `ratatui-image` (4): 终端图片渲染
-- `tui-markdown` (0.3.7): Markdown 到 TUI 组件转换
 - `unicode-width` (0.2): Unicode 字符宽度计算
 
 **构建工具**: Cargo
@@ -54,12 +54,39 @@ revision: 1
 - Graceful degradation（图片能力降级）
 - 终端生命周期成对管理（init / restore）
 
+## 设计决策
+
+### 统一 Markdown 管线到 pulldown-cmark
+
+**决策**: 使用 `pulldown-cmark` 作为唯一的 Markdown 语义来源，同时负责解析和渲染。
+
+**背景**: 早期实现中，`src/markdown.rs` 使用 `pulldown-cmark` 进行块解析，而 `src/ui.rs` 使用 `tui-markdown` 进行文本渲染。这种分裂架构导致语义漂移、维护成本升高、边界不清。
+
+**理由**:
+- 消除多套 Markdown 语义来源导致的行为不一致
+- 降低依赖维护成本（减少一个外部 crate）
+- 提供更清晰的扩展边界（所有 Markdown 特性在一个模块内实现）
+- 允许精细控制渲染行为（直接将 AST 转换为 `ratatui::Text`）
+
+**权衡**:
+- 需要自行实现渲染逻辑（放弃 `tui-markdown` 的现成实现）
+- 每个新 Markdown 特性需要显式添加到解析和渲染层
+
+**替代方案**:
+- 保留 `tui-markdown` 并接受双库架构的语义漂移风险
+- 使用其他 Markdown 库统一管线（评估后选择 `pulldown-cmark`）
+
+**影响**: 所有 Markdown 解析和渲染逻辑现在集中在 `src/markdown.rs` 和 `src/ui.rs`，使用统一的 `MarkdownBlock` 和 `InlineSpan` 模型。
+
+**日期**: 2026-04-06
+**相关文档**: `docs/lessons/unified-markdown-pipeline.md`
+
 ## 核心模块（一级）
 
 | 模块 | 文件 | 职责 |
 |------|------|------|
 | **loader** | `src/loader.rs` | 扫描目录，加载 `.md` 文件，按文件名字典序排序 |
-| **markdown** | `src/markdown.rs` | 将 Markdown 解析为 `Text` 和 `Image` 两类块，处理表格折叠 |
+| **markdown** | `src/markdown.rs` | 将 Markdown 解析为结构化块模型（`MarkdownBlock` + `InlineSpan`），处理表格折叠，提取标题 |
 | **image** | `src/image.rs` | 检测终端图片能力，提供降级策略，处理 SVG 不支持场景 |
 | **app** | `src/app.rs` | 应用状态、事件循环、按键处理、图片状态缓存 |
 | **ui** | `src/ui.rs` | Browse/Present 两种视图渲染、文本滚动、图片渲染 |
@@ -196,8 +223,25 @@ pub struct Slide {
 
 ```rust
 pub enum SlideBlock {
-    Markdown(String),              // Markdown 文本块
+    Markdown(Vec<MarkdownBlock>),  // 结构化 Markdown 块序列
     Image { alt: String, src: String },  // 图片块
+}
+
+pub enum MarkdownBlock {
+    Heading { level: u8, content: Vec<InlineSpan> },
+    Paragraph(Vec<InlineSpan>),
+    BulletList(Vec<ListItem>),
+    OrderedList { start: usize, items: Vec<ListItem> },
+    Quote(Vec<MarkdownBlock>),
+    CodeBlock { language: Option<String>, code: String },
+    Table(TableBlock),
+    ThematicBreak,
+}
+
+pub enum InlineSpan {
+    Text(String), Strong(String), Emphasis(String),
+    Strikethrough(String), Code(String),
+    Link { label: String, destination: String },
 }
 ```
 
@@ -228,8 +272,9 @@ pub enum ImageRender {
 
 1. **加载**: `loader.rs` 读取 `.md` 文件原始内容
 2. **解析**: `markdown.rs` 使用 `pulldown-cmark` 解析为 `SlideBlock` 序列
-3. **预处理**: 表格折叠为卡片布局（适应终端宽度）
-4. **渲染**: `ui.rs` 使用 `tui-markdown` 转换为 ratatui 组件
+3. **结构化**: Markdown 文本被解析为 `MarkdownBlock` 树（标题、段落、列表、表格、代码块等）
+4. **预处理**: 表格折叠为卡片布局（适应终端宽度）
+5. **渲染**: `ui.rs` 直接将 `MarkdownBlock` 转换为 `ratatui::Text`
 
 **表格降级示例**:
 ```
