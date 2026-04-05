@@ -75,7 +75,8 @@ mod tests {
 
     #[test]
     fn parse_blocks_keeps_text_and_images_stable() {
-        let markdown = "# Title\n\nHello **world**.\n\n![System diagram](images/flow.png)\n\n`code`";
+        let markdown =
+            "# Title\n\nHello **world**.\n\n![System diagram](images/flow.png)\n\n`code`";
 
         let blocks = parse_blocks(markdown);
 

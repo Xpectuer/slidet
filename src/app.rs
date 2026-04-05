@@ -1,6 +1,11 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::DefaultTerminal;
+use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use crate::loader::Slide;
 
@@ -10,23 +15,30 @@ pub enum Mode {
     Present,
 }
 
-#[derive(Debug)]
 pub struct App {
     pub slides: Vec<Slide>,
     pub selected: usize,
     pub mode: Mode,
     pub scroll: u16,
     pub should_quit: bool,
+    pub image_picker: Option<Picker>,
+    pub image_states: HashMap<PathBuf, StatefulProtocol>,
 }
 
 impl App {
     pub fn new(slides: Vec<Slide>) -> Self {
+        Self::with_image_picker(slides, default_image_picker())
+    }
+
+    fn with_image_picker(slides: Vec<Slide>, image_picker: Option<Picker>) -> Self {
         Self {
             slides,
             selected: 0,
             mode: Mode::Browse,
             scroll: 0,
             should_quit: false,
+            image_picker,
+            image_states: HashMap::new(),
         }
     }
 
@@ -66,13 +78,31 @@ impl App {
             _ => {}
         }
     }
+
+    pub fn image_state_for(&mut self, path: &Path) -> Result<&mut StatefulProtocol> {
+        let cache_key = path.to_path_buf();
+        if !self.image_states.contains_key(&cache_key) {
+            let picker = self
+                .image_picker
+                .as_ref()
+                .context("image rendering is unavailable for this terminal")?;
+            let dyn_img = image::open(path)
+                .with_context(|| format!("failed to decode image {}", path.display()))?;
+            let protocol = picker.new_resize_protocol(dyn_img);
+            self.image_states.insert(cache_key.clone(), protocol);
+        }
+
+        self.image_states
+            .get_mut(&cache_key)
+            .context("missing cached image state after initialization")
+    }
 }
 
 pub fn run(terminal: &mut DefaultTerminal, slides: Vec<Slide>) -> Result<()> {
     let mut app = App::new(slides);
 
     while !app.should_quit {
-        terminal.draw(|frame| crate::ui::render(frame, &app))?;
+        terminal.draw(|frame| crate::ui::render(frame, &mut app))?;
         if let Event::Key(key) = event::read()? {
             if key.kind == KeyEventKind::Press {
                 app.handle_key(key.code);
@@ -83,12 +113,25 @@ pub fn run(terminal: &mut DefaultTerminal, slides: Vec<Slide>) -> Result<()> {
     Ok(())
 }
 
+fn default_image_picker() -> Option<Picker> {
+    if !crate::image::terminal_supports_images() {
+        return None;
+    }
+
+    Some(Picker::from_query_stdio().unwrap_or_else(|_| Picker::from_fontsize((10, 20))))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{App, Mode};
     use crate::loader::Slide;
     use crossterm::event::KeyCode;
-    use std::path::PathBuf;
+    use ratatui_image::picker::Picker;
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     fn slides() -> Vec<Slide> {
         vec![
@@ -103,6 +146,32 @@ mod tests {
                 raw_markdown: String::from("# Two"),
             },
         ]
+    }
+
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new(label: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("slidet-{label}-{nanos}"));
+            fs::create_dir_all(&path).unwrap();
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
     }
 
     #[test]
@@ -120,5 +189,21 @@ mod tests {
 
         app.handle_key(KeyCode::Char('q'));
         assert!(app.should_quit);
+    }
+
+    #[test]
+    fn image_state_for_caches_render_state_per_path() {
+        let dir = TempDir::new("app-image-state");
+        let image_path = dir.path().join("photo.png");
+        image::DynamicImage::new_rgba8(1, 1)
+            .save(&image_path)
+            .unwrap();
+
+        let mut app = App::with_image_picker(slides(), Some(Picker::from_fontsize((8, 16))));
+
+        app.image_state_for(&image_path).unwrap();
+        app.image_state_for(&image_path).unwrap();
+
+        assert_eq!(app.image_states.len(), 1);
     }
 }

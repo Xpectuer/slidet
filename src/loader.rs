@@ -32,7 +32,8 @@ pub fn load_slides(dir: &Path) -> Result<Vec<Slide>> {
         bail!("no markdown slides found in {}", dir.display());
     }
 
-    paths.into_iter()
+    paths
+        .into_iter()
         .map(|path| {
             let raw_markdown = fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?;

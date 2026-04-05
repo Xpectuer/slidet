@@ -1,7 +1,7 @@
 ---
 title: "Intake Session Log"
 doc_type: proc
-status: ready
+status: activated
 brief: "Q&A transcript for slidet image rendering support"
 confidence: speculative
 created: 2026-04-06
