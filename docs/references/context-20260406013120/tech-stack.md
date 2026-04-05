@@ -1,0 +1,21 @@
+# Tech Stack Snapshot
+
+- Cargo.toml
+
+```toml
+[package]
+name = "slidet"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.28"
+image = "0.25"
+pulldown-cmark = "0.12"
+ratatui = "0.29"
+ratatui-image = "4"
+unicode-width = "0.2"
+
+```
