@@ -2,7 +2,7 @@
 
 下面这张图是一个本地占位 SVG，用来模拟流程图。
 
-![终端播放流程图](assets/terminal-flow.svg)
+![终端播放流程图](assets/terminal-flow.png)
 
 这类内容适合讲三件事：
 
