@@ -6,8 +6,8 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
     DefaultTerminal, Frame,
 };
-use ratatui_image::{Resize, StatefulImage};
 use ratatui_image::protocol::StatefulProtocol;
+use ratatui_image::{Resize, StatefulImage};
 use std::path::Path;
 
 use crate::{
@@ -42,11 +42,7 @@ pub fn restore_terminal() -> Result<()> {
     Ok(())
 }
 
-pub fn render(
-    frame: &mut Frame,
-    model: &RenderModel<'_>,
-    image_states: &mut dyn ImageStateStore,
-) {
+pub fn render(frame: &mut Frame, model: &RenderModel<'_>, image_states: &mut dyn ImageStateStore) {
     match model.mode {
         RenderMode::Browse => render_browse(frame, model, image_states),
         RenderMode::Present => render_present(frame, model, image_states),
@@ -180,7 +176,10 @@ fn push_block_lines(lines: &mut Vec<Line<'static>>, block: &markdown::MarkdownBl
             lines.push(line);
         }
         markdown::MarkdownBlock::Paragraph(content) => {
-            lines.push(Line::from(prefixed_spans(prefix, render_inline_spans(content))));
+            lines.push(Line::from(prefixed_spans(
+                prefix,
+                render_inline_spans(content),
+            )));
         }
         markdown::MarkdownBlock::BulletList(items) => {
             for item in items {
@@ -204,7 +203,9 @@ fn push_block_lines(lines: &mut Vec<Line<'static>>, block: &markdown::MarkdownBl
             if let Some(language) = language {
                 lines.push(Line::styled(
                     format!("{prefix}[code:{language}]"),
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 ));
             }
             for code_line in code.lines() {
@@ -215,7 +216,9 @@ fn push_block_lines(lines: &mut Vec<Line<'static>>, block: &markdown::MarkdownBl
             }
         }
         markdown::MarkdownBlock::Table(table) => {
-            lines.push(Line::from(format!("{prefix}> [table collapsed for terminal width]")));
+            lines.push(Line::from(format!(
+                "{prefix}> [table collapsed for terminal width]"
+            )));
             for (row_idx, row) in table.rows.iter().enumerate() {
                 lines.push(Line::default());
                 lines.push(Line::styled(
@@ -282,10 +285,16 @@ fn render_inline_span(span: &markdown::InlineSpan) -> Vec<Span<'static>> {
     match span {
         markdown::InlineSpan::Text(text) => vec![Span::raw(text.clone())],
         markdown::InlineSpan::Strong(text) => {
-            vec![Span::styled(text.clone(), Style::default().add_modifier(Modifier::BOLD))]
+            vec![Span::styled(
+                text.clone(),
+                Style::default().add_modifier(Modifier::BOLD),
+            )]
         }
         markdown::InlineSpan::Emphasis(text) => {
-            vec![Span::styled(text.clone(), Style::default().add_modifier(Modifier::ITALIC))]
+            vec![Span::styled(
+                text.clone(),
+                Style::default().add_modifier(Modifier::ITALIC),
+            )]
         }
         markdown::InlineSpan::Strikethrough(text) => vec![Span::styled(
             text.clone(),

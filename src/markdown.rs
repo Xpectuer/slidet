@@ -9,12 +9,21 @@ pub enum SlideBlock {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MarkdownBlock {
-    Heading { level: u8, content: Vec<InlineSpan> },
+    Heading {
+        level: u8,
+        content: Vec<InlineSpan>,
+    },
     Paragraph(Vec<InlineSpan>),
     BulletList(Vec<ListItem>),
-    OrderedList { start: usize, items: Vec<ListItem> },
+    OrderedList {
+        start: usize,
+        items: Vec<ListItem>,
+    },
     Quote(Vec<MarkdownBlock>),
-    CodeBlock { language: Option<String>, code: String },
+    CodeBlock {
+        language: Option<String>,
+        code: String,
+    },
     Table(TableBlock),
     ThematicBreak,
 }
@@ -216,11 +225,7 @@ fn parse_block_sequence<'a>(
     blocks
 }
 
-fn parse_list_items<'a>(
-    events: &[Event<'a>],
-    index: &mut usize,
-    ordered: bool,
-) -> Vec<ListItem> {
+fn parse_list_items<'a>(events: &[Event<'a>], index: &mut usize, ordered: bool) -> Vec<ListItem> {
     let mut items = Vec::new();
 
     while *index < events.len() {
@@ -782,10 +787,7 @@ See [docs](https://docs.rs).\n\n\
 
         assert_eq!(
             headings,
-            vec![
-                String::from("Title"),
-                String::from("Subtitle with code"),
-            ]
+            vec![String::from("Title"), String::from("Subtitle with code"),]
         );
     }
 }

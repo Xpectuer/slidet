@@ -14,10 +14,30 @@
 
 ## 安装
 
+### Quick Start Install
+
+安装脚本会自动识别当前平台，从最新 GitHub Release 下载对应二进制，并安装到用户 PATH 中的 `~/.local/bin` 或 `~/bin`。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Xpectuer/slidet/main/scripts/install.sh | bash
+```
+
+如果没有 `curl`，也可以使用：
+
+```bash
+wget -qO- https://raw.githubusercontent.com/Xpectuer/slidet/main/scripts/install.sh | bash
+```
+
+当前脚本支持以下发布平台：
+
+- macOS Apple Silicon
+- macOS Intel
+- Linux x86_64 musl
+
 ### 从源码构建
 
 ```bash
-git clone https://github.com/yourusername/slidet.git
+git clone https://github.com/Xpectuer/slidet.git
 cd slidet
 cargo build --release
 ```
@@ -161,11 +181,32 @@ fn main() {
 ### 测试
 
 ```bash
+# 检查格式
+cargo fmt --check
+
+# 运行 lint
+cargo clippy --all-targets --all-features -- -D warnings
+
 # 运行所有测试
 cargo test
 
 # 快速检查编译
 cargo check
+```
+
+### CI/CD
+
+- CI 通过 GitHub Actions 执行串行检查：`fmt -> clippy -> test`
+- CD 在推送 `v*` tag 时构建并发布以下产物到 GitHub Releases：
+  - `x86_64-unknown-linux-musl`
+  - `x86_64-apple-darwin`
+  - `aarch64-apple-darwin`
+
+示例：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
 ```
 
 ### 文档
