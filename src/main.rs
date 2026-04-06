@@ -4,6 +4,7 @@ use clap::Parser;
 #[derive(Debug, Parser)]
 #[command(name = "slidet")]
 #[command(about = "A terminal markdown slide player")]
+#[command(version)]
 struct Cli {
     slides_dir: std::path::PathBuf,
 }

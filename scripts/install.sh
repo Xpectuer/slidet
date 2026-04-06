@@ -208,7 +208,7 @@ main() {
   ensure_path_configured "$install_dir"
 
   log "installed ${BINARY_NAME} ${version} to ${install_dir}/${BINARY_NAME}"
-  log "run '${BINARY_NAME} --help' to verify the installation"
+  log "run '${BINARY_NAME} --version' to verify the installation"
 
   case ":${PATH:-}:" in
     *":$install_dir:"*)

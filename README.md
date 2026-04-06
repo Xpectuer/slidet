@@ -61,10 +61,16 @@ my-slides/
 ### 2. 运行 slidet
 
 ```bash
+slidet my-slides/
+```
+
+如果你是在源码仓库里调试，也可以使用：
+
+```bash
 cargo run -- my-slides/
 ```
 
-或使用编译后的版本：
+或使用手动编译后的版本：
 
 ```bash
 ./target/release/slidet my-slides/
@@ -90,22 +96,22 @@ cargo run -- my-slides/
 
 ```bash
 # 纯文本演示
-cargo run -- examples/01-text-lecture
+slidet examples/01-text-lecture
 
 # 图片与降级策略演示
-cargo run -- examples/02-image-demo
+slidet examples/02-image-demo
 
 # 工程说明样例
-cargo run -- examples/03-engineering-notes
+slidet examples/03-engineering-notes
 
 # Markdown 回归测试
-cargo run -- examples/04-markdown-regression
+slidet examples/04-markdown-regression
 
 # 解析边界样例
-cargo run -- examples/05-parser-edge-cases
+slidet examples/05-parser-edge-cases
 
 # 导航故事样例
-cargo run -- examples/06-slide-navigation-story
+slidet examples/06-slide-navigation-story
 ```
 
 ## Markdown 支持
