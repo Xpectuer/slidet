@@ -15,7 +15,7 @@ fn main() -> Result<()> {
         .with_context(|| format!("failed to load slides from {}", cli.slides_dir.display()))?;
 
     let mut terminal = slidet::ui::init_terminal()?;
-    let result = slidet::app::run(&mut terminal, slides);
+    let result = slidet::app::run(&mut terminal, slides, cli.slides_dir);
     slidet::ui::restore_terminal()?;
     result
 }

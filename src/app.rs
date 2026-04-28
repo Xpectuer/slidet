@@ -5,6 +5,7 @@ use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 use crate::loader::Slide;
@@ -22,6 +23,9 @@ pub struct App {
     pub scroll: u16,
     pub should_quit: bool,
     pub image: ImageContext,
+    pub slides_dir: PathBuf,
+    pub watcher: Option<crate::watcher::SlideWatcher>,
+    pub reload_indicator: Option<Instant>,
 }
 
 pub struct ImageContext {
@@ -30,13 +34,21 @@ pub struct ImageContext {
 }
 
 impl App {
-    pub fn new(slides: Vec<Slide>) -> Self {
-        Self::with_image_picker(slides, default_image_picker())
+    pub fn new(slides: Vec<Slide>, slides_dir: PathBuf) -> Self {
+        Self::with_image_picker(slides, slides_dir, default_image_picker())
     }
 
-    fn with_image_picker(slides: Vec<Slide>, image_picker: Option<Picker>) -> Self {
+    fn with_image_picker(
+        slides: Vec<Slide>,
+        slides_dir: PathBuf,
+        image_picker: Option<Picker>,
+    ) -> Self {
+        let watcher = crate::watcher::SlideWatcher::new(&slides_dir)
+            .map_err(|e| eprintln!("[watcher] file watching unavailable: {e}"))
+            .ok();
         Self {
             slides,
+            slides_dir,
             selected: 0,
             mode: Mode::Browse,
             scroll: 0,
@@ -45,6 +57,8 @@ impl App {
                 image_picker,
                 image_states: HashMap::new(),
             },
+            watcher,
+            reload_indicator: None,
         }
     }
 
@@ -85,6 +99,30 @@ impl App {
         }
     }
 
+    pub fn reload_slides(&mut self) {
+        let current_path = self.current_slide().path.clone();
+
+        match crate::loader::load_slides(&self.slides_dir) {
+            Ok(new_slides) => {
+                self.slides = new_slides;
+                self.image.image_states.clear();
+
+                // Try to keep the user on the same slide by path
+                if let Some(idx) = self.slides.iter().position(|s| s.path == current_path) {
+                    self.selected = idx;
+                } else {
+                    self.selected = self.selected.min(self.slides.len().saturating_sub(1));
+                }
+                self.scroll = 0;
+                self.reload_indicator = Some(Instant::now());
+            }
+            Err(e) => {
+                // Keep showing old slides — the directory may be temporarily empty
+                eprintln!("[watcher] reload failed: {e}");
+            }
+        }
+    }
+
     pub fn image_state_for(&mut self, path: &Path) -> Result<&mut StatefulProtocol> {
         self.image.image_state_for(path)
     }
@@ -116,17 +154,18 @@ impl crate::ui::ImageStateStore for ImageContext {
     }
 }
 
-pub fn run(terminal: &mut DefaultTerminal, slides: Vec<Slide>) -> Result<()> {
-    let mut app = App::new(slides);
+pub fn run(terminal: &mut DefaultTerminal, slides: Vec<Slide>, slides_dir: PathBuf) -> Result<()> {
+    let mut app = App::new(slides, slides_dir);
 
     while !app.should_quit {
         terminal.draw(|frame| {
-            let (slides, selected, mode, scroll, image) = (
+            let (slides, selected, mode, scroll, image, reload_indicator) = (
                 &app.slides,
                 app.selected,
                 app.mode,
                 app.scroll,
                 &mut app.image,
+                app.reload_indicator,
             );
             let model = crate::ui::RenderModel {
                 slides,
@@ -137,11 +176,35 @@ pub fn run(terminal: &mut DefaultTerminal, slides: Vec<Slide>) -> Result<()> {
                 },
                 scroll,
             };
-            crate::ui::render(frame, &model, image)
+            crate::ui::render(frame, &model, image);
+
+            if let Some(instant) = reload_indicator {
+                if instant.elapsed().as_secs() < 2 {
+                    crate::ui::render_reload_indicator(frame);
+                }
+            }
         })?;
-        if let Event::Key(key) = event::read()? {
-            if key.kind == KeyEventKind::Press {
-                app.handle_key(key.code);
+
+        // Poll for terminal events with a 100ms timeout
+        if event::poll(Duration::from_millis(100))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
+                    app.handle_key(key.code);
+                }
+            }
+        }
+
+        // Check for file changes (non-blocking)
+        if let Some(ref mut watcher) = app.watcher {
+            if watcher.poll_changes() {
+                app.reload_slides();
+            }
+        }
+
+        // Expire reload indicator
+        if let Some(instant) = app.reload_indicator {
+            if instant.elapsed().as_secs() >= 2 {
+                app.reload_indicator = None;
             }
         }
     }
@@ -212,7 +275,7 @@ mod tests {
 
     #[test]
     fn app_navigates_and_switches_modes() {
-        let mut app = App::new(slides());
+        let mut app = App::new(slides(), PathBuf::from("/tmp/test-slides"));
 
         app.handle_key(KeyCode::Down);
         assert_eq!(app.selected, 1);
@@ -235,7 +298,7 @@ mod tests {
             .save(&image_path)
             .unwrap();
 
-        let mut app = App::with_image_picker(slides(), Some(Picker::from_fontsize((8, 16))));
+        let mut app = App::with_image_picker(slides(), PathBuf::from("/tmp/test-slides"), Some(Picker::from_fontsize((8, 16))));
 
         app.image_state_for(&image_path).unwrap();
         app.image_state_for(&image_path).unwrap();

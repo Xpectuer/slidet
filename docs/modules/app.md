@@ -4,8 +4,9 @@ module_name: app
 module_path: src/app.rs
 generated_by: mci-phase-2
 created: 2026-04-06
-revision: 2
-brief: 应用状态、事件循环、按键处理、图片状态缓存
+updated: 2026-04-25
+revision: 3
+brief: 应用状态、事件循环、按键处理、图片状态缓存、热重载
 ---
 
 # App Module
@@ -27,14 +28,15 @@ brief: 应用状态、事件循环、按键处理、图片状态缓存
 
 | 函数签名 | 描述 |
 |----------|------|
-| `App::new(slides: Vec<Slide>) -> Self` | 使用默认图片选择器创建 App 实例 |
+| `App::new(slides: Vec<Slide>, slides_dir: PathBuf) -> Self` | 使用默认图片选择器创建 App 实例（含文件监控） |
 | `App::current_slide(&self) -> &Slide` | 获取当前选中幻灯片的不可变引用 |
 | `App::next_slide(&mut self)` | 切换到下一张幻灯片（如果存在） |
 | `App::previous_slide(&mut self)` | 切换到上一张幻灯片（如果存在） |
 | `App::handle_key(&mut self, code: KeyCode)` | 处理键盘事件，更新应用状态 |
+| `App::reload_slides(&mut self)` | 从磁盘重新加载幻灯片，保持当前幻灯片位置 |
 | `App::image_state_for(&mut self, path: &Path) -> Result<&mut StatefulProtocol>` | 代理到图片上下文，获取或创建图片渲染状态 |
 | `ImageContext::image_state_for(&mut self, path: &Path) -> Result<&mut StatefulProtocol>` | 获取或创建图片的渲染状态（带缓存） |
-| `run(terminal: &mut DefaultTerminal, slides: Vec<Slide>) -> Result<()>` | 主事件循环入口函数 |
+| `run(terminal: &mut DefaultTerminal, slides: Vec<Slide>, slides_dir: PathBuf) -> Result<()>` | 主事件循环入口函数（轮询模式，100ms 超时） |
 <!-- END:INTERFACE -->
 
 <!-- BEGIN:DEPENDENCIES -->
@@ -45,9 +47,10 @@ brief: 应用状态、事件循环、按键处理、图片状态缓存
 ```
 app
 ├── crate::loader::Slide    -- 幻灯片数据结构
-├── crate::ui::{render, RenderModel, RenderMode, ImageStateStore}
+├── crate::ui::{render, render_reload_indicator, RenderModel, RenderMode, ImageStateStore}
 │                           -- UI 渲染函数和渲染模型接口
-└── crate::image::terminal_supports_images  -- 终端图片能力探测
+├── crate::image::terminal_supports_images  -- 终端图片能力探测
+└── crate::watcher::SlideWatcher  -- 文件系统监控（.md 热重载）
 ```
 
 ### 外部依赖
@@ -74,6 +77,9 @@ pub struct App {
     pub scroll: u16,                           // 垂直滚动偏移
     pub should_quit: bool,                     // 退出标志
     pub image: ImageContext,                   // 图片渲染上下文
+    pub slides_dir: PathBuf,                   // 幻灯片目录路径（用于热重载）
+    pub watcher: Option<crate::watcher::SlideWatcher>,  // 文件监控器（可选）
+    pub reload_indicator: Option<Instant>,     // 重载指示器显示截止时间
 }
 
 pub struct ImageContext {
@@ -88,6 +94,8 @@ pub struct ImageContext {
 2. **模式切换**：`Mode` 枚举控制 Browse/Present 两种显示模式
 3. **图片状态缓存**：`ImageContext` 使用 `HashMap<PathBuf, StatefulProtocol>` 按路径缓存图片渲染状态，避免重复解码和协议初始化
 4. **渲染解耦**：`run()` 每帧构造 `ui::RenderModel`，把只读 UI 状态和可变图片缓存分开传给 `ui`
+5. **热重载**：`watcher` 监控 `slides_dir` 中的 `.md` 文件变更，变更时调用 `reload_slides()` 从磁盘重新加载，保持当前幻灯片位置（按路径匹配）
+6. **重载指示器**：`reload_indicator` 记录重载时间戳，2秒内在右下角显示"Reloaded"标签
 
 ### 状态转换规则
 
@@ -99,6 +107,8 @@ pub struct ImageContext {
 | `Esc` 键 | `mode = Browse`, `scroll = 0` |
 | `PageDown` | `scroll += 5` |
 | `PageUp` | `scroll -= 5` |
+| `watcher.poll_changes() == true` | 调用 `reload_slides()`，刷新 `slides`，清空 `image_states`，设置 `reload_indicator = Instant::now()` |
+| `reload_indicator` 超过 2 秒 | `reload_indicator = None` |
 <!-- END:STATE_MANAGEMENT -->
 
 <!-- BEGIN:EDGE_CASES -->
@@ -109,6 +119,8 @@ pub struct ImageContext {
 | 值 | 位置 | 说明 |
 |----|------|------|
 | `5` | `handle_key()` PageDown/PageUp | 每次滚动的行数 |
+| `100` ms | `run()` event::poll | 轮询终端事件的超时时间 |
+| `2` sec | `run()` reload indicator | 重载指示器显示时长 |
 | `(10, 20)` | `default_image_picker()` | fallback 字体尺寸 |
 | `(8, 16)` | tests | 测试用字体尺寸 |
 
@@ -137,6 +149,8 @@ pub struct ImageContext {
 | 终端不支持图片 | `anyhow::Error` | "image rendering is unavailable for this terminal" |
 | 图片解码失败 | `anyhow::Error` | "failed to decode image {path}" |
 | 缓存未命中（逻辑错误） | `anyhow::Error` | "missing cached image state after initialization" |
+| 文件监控初始化失败 | stderr log | "[watcher] file watching unavailable: {e}" |
+| 热重载失败（目录临时清空等） | stderr log | "[watcher] reload failed: {e}"（保留旧幻灯片继续显示） |
 <!-- END:EDGE_CASES -->
 
 <!-- BEGIN:USAGE_EXAMPLE -->
@@ -146,18 +160,20 @@ pub struct ImageContext {
 use slidet::app::{run, App, Mode};
 use slidet::loader::Slide;
 use ratatui::DefaultTerminal;
+use std::path::PathBuf;
 
 // 1. 加载幻灯片
 let slides = vec![
     Slide { path: "01.md".into(), title: "Intro".into(), raw_markdown: "...".into() },
     Slide { path: "02.md".into(), title: "Content".into(), raw_markdown: "...".into() },
 ];
+let slides_dir = PathBuf::from("examples/01-text-lecture");
 
 // 2. 创建终端
 let mut terminal = ratatui::init();
 
-// 3. 运行应用
-match run(&mut terminal, slides) {
+// 3. 运行应用（传入 slides_dir 以启用热重载）
+match run(&mut terminal, slides, slides_dir) {
     Ok(()) => println!("正常退出"),
     Err(e) => eprintln!("错误: {}", e),
 }
@@ -166,7 +182,7 @@ match run(&mut terminal, slides) {
 ratatui::restore();
 
 // 单元测试风格：直接操作 App 状态
-let mut app = App::new(test_slides);
+let mut app = App::new(test_slides, PathBuf::from("/tmp/test-slides"));
 app.handle_key(KeyCode::Down);      // 移动到下一张
 assert_eq!(app.selected, 1);
 app.handle_key(KeyCode::Enter);     // 进入演示模式

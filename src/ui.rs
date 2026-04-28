@@ -49,6 +49,25 @@ pub fn render(frame: &mut Frame, model: &RenderModel<'_>, image_states: &mut dyn
     }
 }
 
+pub fn render_reload_indicator(frame: &mut Frame) {
+    let text = " Reloaded ";
+    let width = u16::try_from(text.len()).unwrap_or(10);
+    let area = Rect {
+        x: frame.area().width.saturating_sub(width + 2),
+        y: frame.area().height.saturating_sub(2),
+        width: width + 2,
+        height: 1,
+    };
+    frame.render_widget(
+        Paragraph::new(text).style(
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        area,
+    );
+}
+
 fn render_browse(
     frame: &mut Frame,
     model: &RenderModel<'_>,
@@ -512,6 +531,9 @@ mod tests {
                 image_picker: None,
                 image_states: std::collections::HashMap::new(),
             },
+            slides_dir: dir.path().to_path_buf(),
+            watcher: None,
+            reload_indicator: None,
         };
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -564,6 +586,9 @@ mod tests {
                 image_picker: Some(Picker::from_fontsize((8, 16))),
                 image_states: std::collections::HashMap::new(),
             },
+            slides_dir: dir.path().to_path_buf(),
+            watcher: None,
+            reload_indicator: None,
         };
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();

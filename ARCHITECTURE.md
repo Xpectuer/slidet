@@ -4,8 +4,8 @@ doc_type: architecture
 brief: 终端 Markdown 幻灯片播放器的系统架构概览
 confidence: verified
 created: 2026-04-06
-updated: 2026-04-06
-revision: 2
+updated: 2026-04-25
+revision: 3
 ---
 
 <!-- BEGIN:architecture -->
@@ -40,6 +40,7 @@ revision: 2
 - `image` (0.25): 图片处理
 - `ratatui-image` (4): 终端图片渲染
 - `unicode-width` (0.2): Unicode 字符宽度计算
+- `notify-debouncer-mini` (0.5): 跨平台文件系统事件去重，用于热重载
 
 **构建工具**: Cargo
 
@@ -88,8 +89,9 @@ revision: 2
 | **loader** | `src/loader.rs` | 扫描目录，加载 `.md` 文件，按文件名字典序排序 |
 | **markdown** | `src/markdown.rs` | 将 Markdown 解析为结构化块模型（`MarkdownBlock` + `InlineSpan`），处理表格折叠，提取标题 |
 | **image** | `src/image.rs` | 检测终端图片能力，提供降级策略，处理 SVG 不支持场景 |
-| **app** | `src/app.rs` | 应用状态、事件循环、按键处理、图片状态缓存 |
-| **ui** | `src/ui.rs` | Browse/Present 两种视图渲染、文本滚动、图片渲染 |
+| **app** | `src/app.rs` | 应用状态、事件循环、按键处理、图片状态缓存、热重载 |
+| **ui** | `src/ui.rs` | Browse/Present 两种视图渲染、文本滚动、图片渲染、重载指示器 |
+| **watcher** | `src/watcher.rs` | 文件系统监控，检测 .md 文件变更触发热重载 |
 
 ## 关键路径
 
@@ -100,10 +102,12 @@ main.rs (CLI 入口)
   → Cli::parse() (解析命令行参数)
   → loader::load_slides() (加载幻灯片目录)
   → ui::init_terminal() (初始化终端)
-  → app::run() (主事件循环)
+  → app::run(slides, slides_dir) (主事件循环)
     → terminal.draw() (渲染帧)
-    → event::read() (读取事件)
+    → event::poll(100ms) (轮询终端事件)
     → app.handle_key() (处理按键)
+    → watcher.poll_changes() (检查文件变更)
+    → app.reload_slides() (变更时重新加载)
   → ui::restore_terminal() (恢复终端)
 ```
 
@@ -254,8 +258,10 @@ pub struct App {
     pub mode: Mode,                    // Browse / Present
     pub scroll: u16,                   // 垂直滚动偏移
     pub should_quit: bool,             // 退出标志
-    pub image_picker: Option<Picker>,  // 图片渲染器
-    pub image_states: HashMap<PathBuf, StatefulProtocol>, // 图片状态缓存
+    pub image: ImageContext,           // 图片渲染上下文
+    pub slides_dir: PathBuf,           // 幻灯片目录路径（用于热重载）
+    pub watcher: Option<SlideWatcher>, // 文件监控器（不可用时为 None）
+    pub reload_indicator: Option<Instant>, // 重载指示器截止时间
 }
 ```
 
@@ -301,6 +307,7 @@ pub enum ImageRender {
 - **image**: 测试降级策略、终端检测
 - **app**: 测试导航、模式切换、图片缓存
 - **ui**: 测试渲染输出（使用 `TestBackend`）
+- **watcher**: 测试 .md 文件变更检测、非 .md 文件过滤
 
 运行测试：
 ```bash
@@ -325,9 +332,12 @@ cargo run -- examples/01-text-lecture
 
 ## 性能考虑
 
-- **图片缓存**: `App::image_states` 缓存已解码图片状态，避免重复解码
+- **图片缓存**: `App::image.image_states` 缓存已解码图片状态，避免重复解码
 - **懒加载**: 图片仅在首次渲染时解码
 - **终端恢复**: 确保异常退出后终端状态恢复（通过 `ratatui::restore()`）
+- **轮询事件循环**: 100ms `event::poll()` 超时替代阻塞 `event::read()`，允许在每帧中非阻塞检查文件变更
+- **文件事件去重**: `notify-debouncer-mini` 200ms 去重窗口防止编辑器多次写入触发重复重载
+- **重载时清空图片缓存**: `reload_slides()` 清空 `image_states` 防止过期图片数据
 
 ## 已知限制
 
@@ -335,6 +345,7 @@ cargo run -- examples/01-text-lecture
 2. **终端兼容性**: 仅支持 Kitty、iTerm2、WezTerm、ghostty 的图片渲染
 3. **表格宽度**: 宽表格会被折叠为卡片布局
 4. **滚动粒度**: 滚动以 5 行为单位（`PageDown`/`PageUp`）
+5. **文件监控平台依赖**: 热重载依赖 `notify` crate 的平台后端（macOS: FSEvents, Linux: inotify, Windows: ReadDirectoryChangesW），在不支持的平台上 graceful 降级为无监控
 
 ## 未来扩展点
 

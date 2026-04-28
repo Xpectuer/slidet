@@ -16,9 +16,9 @@ slidet 是一个终端 Markdown 幻灯片播放器，使用 Rust 编写，支持
 
 ## 关键统计
 
-- 第一级模块数: 5
-- 总公开接口数: 25+
-- 关键外部依赖: ratatui, pulldown-cmark, ratatui-image, image
+- 第一级模块数: 6
+- 总公开接口数: 28+
+- 关键外部依赖: ratatui, pulldown-cmark, ratatui-image, image, notify-debouncer-mini
 
 ## 系统架构概览
 
@@ -33,8 +33,9 @@ slidet 是一个终端 Markdown 幻灯片播放器，使用 Rust 编写，支持
 | loader | [loader.md](loader.md) | 扫描目录，加载 .md 文件，按文件名字典序排序 | 无（叶子模块） |
 | markdown | [markdown.md](markdown.md) | 将 Markdown 解析为结构化块模型（SlideBlock/MarkdownBlock/InlineSpan） | 无（叶子模块） |
 | image | [image.md](image.md) | 检测终端图片能力，提供降级策略 | 无（叶子模块） |
-| app | [app.md](app.md) | 应用状态、事件循环、按键处理、图片状态缓存 | loader, ui, image |
-| ui | [ui.md](ui.md) | Browse/Present 双模式渲染、文本滚动、图片渲染 | image, loader, markdown |
+| app | [app.md](app.md) | 应用状态、事件循环、按键处理、图片状态缓存、热重载 | loader, ui, image, watcher |
+| ui | [ui.md](ui.md) | Browse/Present 双模式渲染、文本滚动、图片渲染、重载指示器 | image, loader, markdown |
+| watcher | [watcher.md](watcher.md) | 文件系统监控，检测 .md 文件变更触发热重载 | 无（叶子模块） |
 
 <!-- END:module-index -->
 
@@ -51,6 +52,7 @@ graph TD
     app --> loader
     app --> ui
     app --> image
+    app --> watcher
 
     ui --> image
     ui --> loader
@@ -59,19 +61,21 @@ graph TD
     loader -.->|无依赖| std[std::fs, std::path]
     markdown -.->|无依赖| pulldown[pulldown-cmark]
     image -.->|无依赖| std
+    watcher -.->|无依赖| notify[notify-debouncer-mini]
 
     style loader fill:#e1f5ff
     style markdown fill:#e1f5ff
     style image fill:#e1f5ff
+    style watcher fill:#e1f5ff
     style app fill:#fff4e1
     style ui fill:#fff4e1
 ```
 
 **说明**:
-- 蓝色节点（loader, markdown, image）：叶子模块，无内部依赖，可独立测试
+- 蓝色节点（loader, markdown, image, watcher）：叶子模块，无内部依赖，可独立测试
 - 黄色节点（app, ui）：状态管理和渲染模块，依赖叶子模块
 - `app` 负责事件循环并构造 `RenderModel`，`ui` 仅消费渲染模型和图片状态接口
-- loader、markdown、image 是纯函数模块，易于测试和维护
+- loader、markdown、image、watcher 是纯函数/独立模块，易于测试和维护
 
 <!-- END:dependency-graph -->
 
@@ -110,15 +114,16 @@ graph TD
 
 | 接口 | 签名 | 说明 |
 |------|------|------|
-| `run` | `fn(terminal: &mut DefaultTerminal, slides: Vec<Slide>) -> Result<()>` | 主事件循环 |
-| `App::new` | `fn(slides: Vec<Slide>) -> Self` | 创建 App 实例 |
+| `run` | `fn(terminal: &mut DefaultTerminal, slides: Vec<Slide>, slides_dir: PathBuf) -> Result<()>` | 主事件循环（轮询模式，100ms 超时） |
+| `App::new` | `fn(slides: Vec<Slide>, slides_dir: PathBuf) -> Self` | 创建 App 实例（含文件监控） |
 | `App::current_slide` | `fn(&self) -> &Slide` | 获取当前幻灯片 |
 | `App::next_slide` | `fn(&mut self)` | 切换到下一张 |
 | `App::previous_slide` | `fn(&mut self)` | 切换到上一张 |
 | `App::handle_key` | `fn(&mut self, code: KeyCode)` | 处理键盘事件 |
+| `App::reload_slides` | `fn(&mut self)` | 从磁盘重新加载幻灯片，保持当前位置 |
 | `App::image_state_for` | `fn(&mut self, path: &Path) -> Result<&mut StatefulProtocol>` | 获取图片渲染状态 |
 | `Mode` | `enum { Browse, Present }` | 显示模式 |
-| `App` | `struct { slides, selected, mode, scroll, should_quit, image_picker, image_states }` | 应用状态 |
+| `App` | `struct { slides, selected, mode, scroll, should_quit, image, slides_dir, watcher, reload_indicator }` | 应用状态 |
 
 ### ui 模块
 
@@ -126,8 +131,17 @@ graph TD
 |------|------|------|
 | `init_terminal` | `fn() -> Result<DefaultTerminal>` | 初始化终端 |
 | `restore_terminal` | `fn() -> Result<()>` | 恢复终端状态 |
-| `render` | `fn(frame: &mut Frame, app: &mut App)` | 主渲染入口 |
+| `render` | `fn(frame: &mut Frame, model: &RenderModel, image_states: &mut dyn ImageStateStore)` | 主渲染入口 |
+| `render_reload_indicator` | `fn(frame: &mut Frame)` | 渲染"Reloaded"指示器（右下角，2秒后消失） |
 | `render_slide_content` | `fn(base_dir: Option<&Path>, raw_markdown: &str) -> String` | 渲染为纯文本字符串 |
+
+### watcher 模块
+
+| 接口 | 签名 | 说明 |
+|------|------|------|
+| `SlideWatcher::new` | `fn(dir: &Path) -> Result<Self>` | 创建文件监控器 |
+| `SlideWatcher::poll_changes` | `fn(&mut self) -> bool` | 非阻塞检查 .md 文件变更 |
+| `SlideWatcher` | `struct { _debouncer, rx }` | 文件监控器（debounced，200ms） |
 
 <!-- END:interface-index -->
 
@@ -142,7 +156,8 @@ graph TD
 | loader | 无 | ✅ 确认，仅依赖 std 和 anyhow |
 | markdown | 无 | ✅ 确认，仅依赖 pulldown-cmark 和 std |
 | image | 无 | ✅ 确认，仅依赖 std 和 anyhow |
-| app | loader, ui, image | ✅ 确认，使用 Slide、render()、terminal_supports_images() |
+| watcher | 无 | ✅ 确认，仅依赖 notify-debouncer-mini 和 std |
+| app | loader, ui, image, watcher | ✅ 确认，使用 Slide、render()、terminal_supports_images()、SlideWatcher |
 | ui | image, loader, markdown | ✅ 确认，使用 RenderModel/ImageStateStore 与图片、加载、Markdown 类型 |
 
 ### 循环依赖分析
@@ -162,7 +177,7 @@ graph TD
 
 ## 质量门槛检查
 
-- ✅ 模块索引表完整（列出所有 5 个模块和主要职责）
+- ✅ 模块索引表完整（列出所有 6 个模块和主要职责）
 - ✅ 依赖关系图清晰且准确（Mermaid 格式）
 - ✅ 全局接口索引覆盖 100% 公开接口
 - ✅ 交叉引用检查完成，确认已无循环依赖

@@ -124,7 +124,7 @@ Keep separate libraries when:
 ## Verification
 
 - `cargo check`: Compiles successfully without `tui-markdown`
-- `cargo test`: All 16 unit tests pass (loader, markdown, image, app, ui)
+- `cargo test`: All 18 unit tests pass (loader, markdown, image, app, ui, watcher)
 - Manual testing: Common markdown elements (headings, lists, tables, links, code blocks) render correctly
 
 ## References
