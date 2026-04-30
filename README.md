@@ -1,5 +1,7 @@
 # slidet
 
+![logo](./logo.jpg)
+
 **Terminal Markdown Slide Player** — 在终端中播放你的 Markdown 幻灯片。
 
 `slidet` 是一个用 Rust 编写的交互式终端 Markdown 幻灯片播放器。它将目录中的 `.md` 文件按文件名字典序组织成幻灯片，支持双模式浏览和全屏演示。
