@@ -73,15 +73,11 @@ pub fn parse_blocks(markdown: &str) -> Vec<SlideBlock> {
                     cursor = range.end;
                 }
             }
-            Event::Text(content) | Event::Code(content) => {
-                if image_src.is_some() {
-                    image_alt.push_str(&content);
-                }
+            Event::Text(content) | Event::Code(content) if image_src.is_some() => {
+                image_alt.push_str(&content);
             }
-            Event::SoftBreak | Event::HardBreak => {
-                if image_src.is_some() {
-                    image_alt.push(' ');
-                }
+            Event::SoftBreak | Event::HardBreak if image_src.is_some() => {
+                image_alt.push(' ');
             }
             _ => {}
         }

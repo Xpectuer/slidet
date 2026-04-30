@@ -431,7 +431,7 @@ fn push_block_lines(
                 let mut spans: Vec<Span<'static>> = vec![bar];
                 let old_spans = std::mem::take(line);
                 let old_style = old_spans.style;
-                spans.extend(old_spans.spans.into_iter());
+                spans.extend(old_spans.spans);
                 let merged = old_style.patch(quote_style);
                 *line = Line {
                     spans,
