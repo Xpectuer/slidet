@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::loader::{Slide, SlideNode, VisibleItem, VisibleItemKind, compute_visible_items};
+use crate::loader::{compute_visible_items, Slide, SlideNode, VisibleItem, VisibleItemKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -114,7 +114,10 @@ impl App {
             Some(item) if matches!(item.kind, VisibleItemKind::Group { .. }) => item.group_index,
             _ => return,
         };
-        if let SlideNode::Group { ref mut expanded, .. } = &mut self.nodes[group_index] {
+        if let SlideNode::Group {
+            ref mut expanded, ..
+        } = &mut self.nodes[group_index]
+        {
             *expanded = !*expanded;
             self.visible = compute_visible_items(&self.nodes);
             self.selected = self.selected.min(self.visible.len().saturating_sub(1));
@@ -145,7 +148,10 @@ impl App {
                     self.mode = Mode::Browse;
                     self.scroll = 0;
                 } else if self.selected < self.visible.len() {
-                    if matches!(self.visible[self.selected].kind, VisibleItemKind::Group { .. }) {
+                    if matches!(
+                        self.visible[self.selected].kind,
+                        VisibleItemKind::Group { .. }
+                    ) {
                         self.toggle_expand();
                     } else {
                         self.mode = Mode::Present;
@@ -167,18 +173,27 @@ impl App {
         match crate::loader::load_slides(&self.slides_dir) {
             Ok(new_nodes) => {
                 // Preserve expand state by matching group paths
-                let old_expand: HashMap<PathBuf, bool> = self.nodes.iter().filter_map(|n| {
-                    if let SlideNode::Group { path, expanded, .. } = n {
-                        Some((path.clone(), *expanded))
-                    } else {
-                        None
-                    }
-                }).collect();
+                let old_expand: HashMap<PathBuf, bool> = self
+                    .nodes
+                    .iter()
+                    .filter_map(|n| {
+                        if let SlideNode::Group { path, expanded, .. } = n {
+                            Some((path.clone(), *expanded))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
 
                 self.nodes = new_nodes;
                 // Restore expand state
                 for node in &mut self.nodes {
-                    if let SlideNode::Group { path, ref mut expanded, .. } = node {
+                    if let SlideNode::Group {
+                        path,
+                        ref mut expanded,
+                        ..
+                    } = node
+                    {
                         if let Some(was_expanded) = old_expand.get(path) {
                             *expanded = *was_expanded;
                         }
@@ -191,9 +206,9 @@ impl App {
                 // Try to keep the user on the same slide by path
                 if let Some(ref path) = current_path {
                     if let Some(idx) = self.visible.iter().position(|item| {
-                        item.slide_ref.as_ref().is_some_and(|r| {
-                            SlideNode::resolve_slide(&self.nodes, r).path == *path
-                        })
+                        item.slide_ref
+                            .as_ref()
+                            .is_some_and(|r| SlideNode::resolve_slide(&self.nodes, r).path == *path)
                     }) {
                         self.selected = idx;
                     } else {
@@ -242,7 +257,11 @@ impl crate::ui::ImageStateStore for ImageContext {
     }
 }
 
-pub fn run(terminal: &mut DefaultTerminal, nodes: Vec<SlideNode>, slides_dir: PathBuf) -> Result<()> {
+pub fn run(
+    terminal: &mut DefaultTerminal,
+    nodes: Vec<SlideNode>,
+    slides_dir: PathBuf,
+) -> Result<()> {
     let mut app = App::new(nodes, slides_dir);
 
     while !app.should_quit {
@@ -434,7 +453,10 @@ mod tests {
     fn app_present_mode_skips_groups() {
         let mut nodes = nodes_with_group();
         // Expand the group first
-        if let SlideNode::Group { ref mut expanded, .. } = nodes[1] {
+        if let SlideNode::Group {
+            ref mut expanded, ..
+        } = nodes[1]
+        {
             *expanded = true;
         }
         let mut app = App::new(nodes, PathBuf::from("/tmp/test-slides"));
@@ -462,7 +484,11 @@ mod tests {
             .save(&image_path)
             .unwrap();
 
-        let mut app = App::with_image_picker(leaf_nodes(), PathBuf::from("/tmp/test-slides"), Some(Picker::from_fontsize((8, 16))));
+        let mut app = App::with_image_picker(
+            leaf_nodes(),
+            PathBuf::from("/tmp/test-slides"),
+            Some(Picker::from_fontsize((8, 16))),
+        );
 
         app.image_state_for(&image_path).unwrap();
         app.image_state_for(&image_path).unwrap();

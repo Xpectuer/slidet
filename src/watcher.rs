@@ -4,20 +4,21 @@ use std::path::Path;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
-type Debouncer = notify_debouncer_mini::Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>;
+type Debouncer =
+    notify_debouncer_mini::Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>;
 
 pub struct SlideWatcher {
     _debouncer: Debouncer,
-    rx: Receiver<Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify_debouncer_mini::notify::Error>>,
+    rx: Receiver<
+        Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify_debouncer_mini::notify::Error>,
+    >,
 }
 
 impl SlideWatcher {
     pub fn new(dir: &Path) -> Result<Self> {
         let (tx, rx) = std::sync::mpsc::channel();
         let mut debouncer = notify_debouncer_mini::new_debouncer(Duration::from_millis(200), tx)?;
-        debouncer
-            .watcher()
-            .watch(dir, RecursiveMode::Recursive)?;
+        debouncer.watcher().watch(dir, RecursiveMode::Recursive)?;
         Ok(Self {
             _debouncer: debouncer,
             rx,
@@ -57,10 +58,8 @@ mod tests {
 
     impl TempDir {
         fn new(label: &str) -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "slidet-watcher-{label}-{}",
-                std::process::id()
-            ));
+            let path =
+                std::env::temp_dir().join(format!("slidet-watcher-{label}-{}", std::process::id()));
             let _ = fs::remove_dir_all(&path);
             fs::create_dir_all(&path).unwrap();
             Self { path }

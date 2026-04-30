@@ -74,13 +74,17 @@ pub struct VisibleItem {
 
 #[derive(Debug, Clone)]
 pub enum VisibleItemKind {
-    RootLeaf { slide_index: usize },
+    RootLeaf {
+        slide_index: usize,
+    },
     Group {
         name: String,
         expanded: bool,
         child_count: usize,
     },
-    GroupChild { child_index: usize },
+    GroupChild {
+        child_index: usize,
+    },
 }
 
 pub fn compute_visible_items(nodes: &[SlideNode]) -> Vec<VisibleItem> {
@@ -242,11 +246,9 @@ pub fn load_slides(dir: &Path) -> Result<Vec<SlideNode>> {
     Ok(nodes)
 }
 
-
-
 #[cfg(test)]
 mod tests {
-    use super::{load_slides, compute_visible_items, SlideNode};
+    use super::{compute_visible_items, load_slides, SlideNode};
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -333,7 +335,9 @@ mod tests {
 
         assert_eq!(nodes.len(), 3);
         assert!(matches!(&nodes[0], SlideNode::Leaf(s) if s.title == "00-intro"));
-        assert!(matches!(&nodes[1], SlideNode::Group { name, children, .. } if name == "01-topic" && children.len() == 2));
+        assert!(
+            matches!(&nodes[1], SlideNode::Group { name, children, .. } if name == "01-topic" && children.len() == 2)
+        );
         assert!(matches!(&nodes[2], SlideNode::Leaf(s) if s.title == "02-summary"));
     }
 
@@ -376,8 +380,16 @@ mod tests {
                 name: "group".into(),
                 path: dir.path().join("group"),
                 children: vec![
-                    super::Slide { path: dir.path().join("group/a.md"), title: "a".into(), raw_markdown: "# A".into() },
-                    super::Slide { path: dir.path().join("group/b.md"), title: "b".into(), raw_markdown: "# B".into() },
+                    super::Slide {
+                        path: dir.path().join("group/a.md"),
+                        title: "a".into(),
+                        raw_markdown: "# A".into(),
+                    },
+                    super::Slide {
+                        path: dir.path().join("group/b.md"),
+                        title: "b".into(),
+                        raw_markdown: "# B".into(),
+                    },
                 ],
                 expanded: false,
             },
@@ -390,16 +402,16 @@ mod tests {
     #[test]
     fn compute_visible_items_expand_shows_children() {
         let dir = TempDir::new("vis-expand");
-        let nodes = vec![
-            SlideNode::Group {
-                name: "group".into(),
-                path: dir.path().join("group"),
-                children: vec![
-                    super::Slide { path: dir.path().join("group/a.md"), title: "a".into(), raw_markdown: "# A".into() },
-                ],
-                expanded: true,
-            },
-        ];
+        let nodes = vec![SlideNode::Group {
+            name: "group".into(),
+            path: dir.path().join("group"),
+            children: vec![super::Slide {
+                path: dir.path().join("group/a.md"),
+                title: "a".into(),
+                raw_markdown: "# A".into(),
+            }],
+            expanded: true,
+        }];
 
         let visible = compute_visible_items(&nodes);
         assert_eq!(visible.len(), 2); // group header + 1 child

@@ -111,7 +111,10 @@ fn render_browse(
                     let style = Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD);
-                    Line::styled(format!("{prefix}{indent}{arrow} {name} ({child_count})"), style)
+                    Line::styled(
+                        format!("{prefix}{indent}{arrow} {name} ({child_count})"),
+                        style,
+                    )
                 }
             }
         })
@@ -154,7 +157,11 @@ fn render_browse(
             });
             let text = match group_info {
                 Some((name, count, expanded)) => {
-                    let hint = if expanded { "Press Enter to collapse" } else { "Press Enter to expand" };
+                    let hint = if expanded {
+                        "Press Enter to collapse"
+                    } else {
+                        "Press Enter to expand"
+                    };
                     format!("  {name}\n\n  {count} slides in this group\n\n  {hint}")
                 }
                 None => String::from("  No slide selected"),
@@ -234,7 +241,6 @@ fn text_content_height_from_blocks(blocks: &[SlideBlock], width: u16) -> u16 {
     total.max(1)
 }
 
-
 fn render_slide_blocks(
     frame: &mut Frame,
     inner: Rect,
@@ -253,7 +259,15 @@ fn render_slide_blocks(
     render_text_blocks(frame, inner, model, &blocks);
 
     // Render image blocks below the bordered area, or fallback inside if no space below
-    render_image_blocks_below(frame, border_area, inner, image_states, base_dir, model, &blocks);
+    render_image_blocks_below(
+        frame,
+        border_area,
+        inner,
+        image_states,
+        base_dir,
+        model,
+        &blocks,
+    );
 }
 
 fn render_text_blocks(
@@ -656,7 +670,7 @@ mod tests {
     use super::{render, RenderMode, RenderModel};
     use crate::{
         app::{App, ImageContext},
-        loader::{Slide, SlideNode, VisibleItem, VisibleItemKind, compute_visible_items},
+        loader::{compute_visible_items, Slide, SlideNode, VisibleItem, VisibleItemKind},
     };
     use ratatui::{backend::TestBackend, Terminal};
     use ratatui_image::picker::Picker;
