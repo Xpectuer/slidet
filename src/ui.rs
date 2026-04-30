@@ -224,7 +224,7 @@ fn text_content_height(raw_markdown: &str, width: u16) -> u16 {
     let mut total: u16 = 0;
     for block in &markdown::parse_blocks(raw_markdown) {
         if let SlideBlock::Markdown(_) = block {
-            total = total.saturating_add(block_height(block, width));
+            total = total.saturating_add(block_height(block, width, 0));
             total = total.saturating_add(1);
         }
     }
@@ -235,7 +235,7 @@ fn text_content_height_from_blocks(blocks: &[SlideBlock], width: u16) -> u16 {
     let mut total: u16 = 0;
     for block in blocks {
         if let SlideBlock::Markdown(_) = block {
-            total = total.saturating_add(block_height(block, width));
+            total = total.saturating_add(block_height(block, width, 0));
             total = total.saturating_add(1);
         }
     }
@@ -283,7 +283,7 @@ fn render_text_blocks(
     let mut cursor_y = i32::from(area.y) - i32::from(model.scroll);
     for block in blocks {
         if let SlideBlock::Markdown(ref md_blocks) = block {
-            let height = block_height(block, area.width);
+            let height = block_height(block, area.width, 0);
             if let Some((visible, text_scroll)) = clip_rect(area, cursor_y, height) {
                 render_markdown_block(frame, visible, md_blocks, text_scroll);
             }
@@ -334,7 +334,7 @@ fn render_image_blocks_below(
     let mut cursor_y = i32::from(image_area.y) - i32::from(model.scroll);
     for block in blocks {
         if let SlideBlock::Image { ref src, .. } = block {
-            let height = block_height(block, image_area.width);
+            let height = block_height(block, image_area.width, image_area.height);
             if let Some((visible, _)) = clip_rect(image_area, cursor_y, height) {
                 render_image_block(frame, visible, image_states, base_dir, src);
             }
@@ -732,13 +732,19 @@ fn render_image_block(
     }
 }
 
-fn block_height(block: &SlideBlock, width: u16) -> u16 {
+fn block_height(block: &SlideBlock, width: u16, image_max_height: u16) -> u16 {
     match block {
         SlideBlock::Markdown(blocks) => {
             let rendered = render_markdown_text(blocks, width);
             estimate_text_height(&rendered, width.max(1))
         }
-        SlideBlock::Image { .. } => 12,
+        SlideBlock::Image { .. } => {
+            if image_max_height == 0 {
+                12
+            } else {
+                image_max_height.min(150)
+            }
+        }
     }
 }
 
