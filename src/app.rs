@@ -8,7 +8,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::loader::{compute_visible_items, Slide, SlideNode, VisibleItem, VisibleItemKind};
+use crate::loader::{
+    compute_flat_refs, compute_visible_items, Slide, SlideNode, SlideRef, VisibleItem,
+    VisibleItemKind,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -19,7 +22,9 @@ pub enum Mode {
 pub struct App {
     pub nodes: Vec<SlideNode>,
     pub visible: Vec<VisibleItem>,
+    pub flat_refs: Vec<SlideRef>,
     pub selected: usize,
+    pub present_index: usize,
     pub mode: Mode,
     pub scroll: u16,
     pub should_quit: bool,
@@ -48,11 +53,14 @@ impl App {
             .map_err(|e| eprintln!("[watcher] file watching unavailable: {e}"))
             .ok();
         let visible = compute_visible_items(&nodes);
+        let flat_refs = compute_flat_refs(&nodes);
         Self {
             nodes,
             visible,
+            flat_refs,
             slides_dir,
             selected: 0,
+            present_index: 0,
             mode: Mode::Browse,
             scroll: 0,
             should_quit: false,
@@ -86,27 +94,64 @@ impl App {
     }
 
     fn next_slide_present(&mut self) {
-        let start = self.selected + 1;
-        for i in start..self.visible.len() {
-            if self.visible[i].slide_ref.is_some() {
-                self.selected = i;
-                self.scroll = 0;
-                return;
-            }
+        if self.present_index + 1 < self.flat_refs.len() {
+            self.present_index += 1;
+            self.scroll = 0;
         }
     }
 
     fn previous_slide_present(&mut self) {
-        if self.selected == 0 {
-            return;
+        if self.present_index > 0 {
+            self.present_index -= 1;
+            self.scroll = 0;
         }
-        for i in (0..self.selected).rev() {
-            if self.visible[i].slide_ref.is_some() {
-                self.selected = i;
-                self.scroll = 0;
-                return;
+    }
+
+    fn enter_present_mode(&mut self) {
+        let path = match self.current_slide() {
+            Some(s) => s.path.clone(),
+            None => return,
+        };
+        if let Some(idx) = self.flat_refs.iter().position(|r| {
+            SlideNode::resolve_slide(&self.nodes, r).path == path
+        }) {
+            self.present_index = idx;
+        }
+        self.mode = Mode::Present;
+        self.scroll = 0;
+    }
+
+    fn exit_present_mode(&mut self) {
+        let path = SlideNode::resolve_slide(
+            &self.nodes,
+            &self.flat_refs[self.present_index],
+        )
+        .path
+        .clone();
+
+        // Auto-expand the group if the slide is inside a collapsed one
+        if let SlideRef::InGroup { group_index, .. } = &self.flat_refs[self.present_index] {
+            if let SlideNode::Group {
+                ref mut expanded, ..
+            } = &mut self.nodes[*group_index]
+            {
+                if !*expanded {
+                    *expanded = true;
+                    self.visible = compute_visible_items(&self.nodes);
+                }
             }
         }
+
+        // Find the slide in the visible list
+        if let Some(idx) = self.visible.iter().position(|item| {
+            item.slide_ref
+                .as_ref()
+                .is_some_and(|r| SlideNode::resolve_slide(&self.nodes, r).path == path)
+        }) {
+            self.selected = idx;
+        }
+        self.mode = Mode::Browse;
+        self.scroll = 0;
     }
 
     pub fn toggle_expand(&mut self) {
@@ -145,8 +190,7 @@ impl App {
             KeyCode::PageUp => self.scroll = self.scroll.saturating_sub(5),
             KeyCode::Enter => {
                 if self.mode == Mode::Present {
-                    self.mode = Mode::Browse;
-                    self.scroll = 0;
+                    self.exit_present_mode();
                 } else if self.selected < self.visible.len() {
                     if matches!(
                         self.visible[self.selected].kind,
@@ -154,14 +198,17 @@ impl App {
                     ) {
                         self.toggle_expand();
                     } else {
-                        self.mode = Mode::Present;
-                        self.scroll = 0;
+                        self.enter_present_mode();
                     }
                 }
             }
             KeyCode::Esc => {
-                self.mode = Mode::Browse;
-                self.scroll = 0;
+                if self.mode == Mode::Present {
+                    self.exit_present_mode();
+                } else {
+                    self.mode = Mode::Browse;
+                    self.scroll = 0;
+                }
             }
             _ => {}
         }
@@ -201,6 +248,7 @@ impl App {
                 }
 
                 self.visible = compute_visible_items(&self.nodes);
+                self.flat_refs = compute_flat_refs(&self.nodes);
                 self.image.image_states.clear();
 
                 // Try to keep the user on the same slide by path
@@ -266,10 +314,12 @@ pub fn run(
 
     while !app.should_quit {
         terminal.draw(|frame| {
-            let (nodes, visible, selected, mode, scroll, image, reload_indicator) = (
+            let (nodes, visible, flat_refs, selected, present_index, mode, scroll, image, reload_indicator) = (
                 &app.nodes,
                 &app.visible,
+                &app.flat_refs,
                 app.selected,
+                app.present_index,
                 app.mode,
                 app.scroll,
                 &mut app.image,
@@ -278,7 +328,9 @@ pub fn run(
             let model = crate::ui::RenderModel {
                 nodes,
                 visible,
+                flat_refs,
                 selected,
+                present_index,
                 mode: match mode {
                     Mode::Browse => crate::ui::RenderMode::Browse,
                     Mode::Present => crate::ui::RenderMode::Present,
@@ -450,30 +502,43 @@ mod tests {
     }
 
     #[test]
-    fn app_present_mode_skips_groups() {
-        let mut nodes = nodes_with_group();
-        // Expand the group first
-        if let SlideNode::Group {
-            ref mut expanded, ..
-        } = nodes[1]
-        {
-            *expanded = true;
-        }
-        let mut app = App::new(nodes, PathBuf::from("/tmp/test-slides"));
-        // visible: intro(0), group(1), child-a(2), child-b(3), summary(4)
+    fn app_present_mode_plays_all_slides_across_groups() {
+        // Group is collapsed — children are NOT in the visible list
+        let mut app = App::new(nodes_with_group(), PathBuf::from("/tmp/test-slides"));
+        // visible (Browse): intro(0), group-collapsed(1), summary(2)
+        assert_eq!(app.visible.len(), 3);
 
-        app.handle_key(KeyCode::Enter); // on intro leaf -> Present mode
+        // Enter Present mode from intro leaf
+        app.handle_key(KeyCode::Enter);
         assert_eq!(app.mode, Mode::Present);
 
-        // In Present mode, j should skip group header and go to child-a
-        app.handle_key(KeyCode::Down);
-        assert!(app.current_slide().unwrap().title == "01-a");
+        // flat_refs has 4 slides: intro, 01-a, 02-b, summary
+        assert_eq!(app.flat_refs.len(), 4);
+        assert_eq!(app.present_index, 0);
 
-        app.handle_key(KeyCode::Down);
-        assert!(app.current_slide().unwrap().title == "02-b");
+        // j navigates through ALL slides, including those inside collapsed group
+        app.handle_key(KeyCode::Down); // -> 01-a (inside collapsed group)
+        let slide = SlideNode::resolve_slide(&app.nodes, &app.flat_refs[app.present_index]);
+        assert_eq!(slide.title, "01-a");
 
-        app.handle_key(KeyCode::Down);
-        assert!(app.current_slide().unwrap().title == "02-summary");
+        app.handle_key(KeyCode::Down); // -> 02-b
+        let slide = SlideNode::resolve_slide(&app.nodes, &app.flat_refs[app.present_index]);
+        assert_eq!(slide.title, "02-b");
+
+        app.handle_key(KeyCode::Down); // -> summary
+        let slide = SlideNode::resolve_slide(&app.nodes, &app.flat_refs[app.present_index]);
+        assert_eq!(slide.title, "02-summary");
+
+        // k goes back
+        app.handle_key(KeyCode::Up); // -> 02-b
+        let slide = SlideNode::resolve_slide(&app.nodes, &app.flat_refs[app.present_index]);
+        assert_eq!(slide.title, "02-b");
+
+        // Esc returns to Browse, auto-expands group if needed
+        app.handle_key(KeyCode::Esc);
+        assert_eq!(app.mode, Mode::Browse);
+        // Group should have been auto-expanded because we were viewing 02-b inside it
+        assert_eq!(app.visible.len(), 5);
     }
 
     #[test]

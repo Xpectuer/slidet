@@ -136,6 +136,26 @@ pub fn compute_visible_items(nodes: &[SlideNode]) -> Vec<VisibleItem> {
     items
 }
 
+pub fn compute_flat_refs(nodes: &[SlideNode]) -> Vec<SlideRef> {
+    let mut refs = Vec::new();
+    for (i, node) in nodes.iter().enumerate() {
+        match node {
+            SlideNode::Leaf(_) => {
+                refs.push(SlideRef::Root(i));
+            }
+            SlideNode::Group { children, .. } => {
+                for j in 0..children.len() {
+                    refs.push(SlideRef::InGroup {
+                        group_index: i,
+                        child_index: j,
+                    });
+                }
+            }
+        }
+    }
+    refs
+}
+
 pub fn load_slides(dir: &Path) -> Result<Vec<SlideNode>> {
     if !dir.exists() {
         bail!("slides directory does not exist: {}", dir.display());

@@ -12,7 +12,7 @@ use std::path::Path;
 
 use crate::{
     image::{self, ImageRender},
-    loader::{Slide, SlideNode, VisibleItem, VisibleItemKind},
+    loader::{Slide, SlideNode, SlideRef, VisibleItem, VisibleItemKind},
     markdown::{self, SlideBlock},
 };
 
@@ -25,7 +25,9 @@ pub enum RenderMode {
 pub struct RenderModel<'a> {
     pub nodes: &'a [SlideNode],
     pub visible: &'a [VisibleItem],
+    pub flat_refs: &'a [SlideRef],
     pub selected: usize,
+    pub present_index: usize,
     pub mode: RenderMode,
     pub scroll: u16,
 }
@@ -183,9 +185,8 @@ fn render_present(
     image_states: &mut dyn ImageStateStore,
 ) {
     let current = model
-        .visible
-        .get(model.selected)
-        .and_then(|item| item.slide_ref.as_ref())
+        .flat_refs
+        .get(model.present_index)
         .map(|r| SlideNode::resolve_slide(model.nodes, r).clone());
 
     let Some(current) = current else {
@@ -670,7 +671,7 @@ mod tests {
     use super::{render, RenderMode, RenderModel};
     use crate::{
         app::{App, ImageContext},
-        loader::{compute_visible_items, Slide, SlideNode, VisibleItem, VisibleItemKind},
+        loader::{compute_flat_refs, compute_visible_items, Slide, SlideNode},
     };
     use ratatui::{backend::TestBackend, Terminal};
     use ratatui_image::picker::Picker;
@@ -714,10 +715,13 @@ mod tests {
             raw_markdown: String::from("# Title\n\nBody\n\n![diagram](missing.png)"),
         })];
         let visible = compute_visible_items(&nodes);
+        let flat_refs = compute_flat_refs(&nodes);
         App {
             nodes,
             visible,
+            flat_refs,
             selected: 0,
+            present_index: 0,
             mode: crate::app::Mode::Browse,
             scroll: 0,
             should_quit: false,
@@ -743,7 +747,9 @@ mod tests {
                 let model = RenderModel {
                     nodes: &app.nodes,
                     visible: &app.visible,
+                    flat_refs: &app.flat_refs,
                     selected: app.selected,
+                    present_index: app.present_index,
                     mode: RenderMode::Browse,
                     scroll: app.scroll,
                 };
@@ -778,10 +784,13 @@ mod tests {
             raw_markdown: String::from("# Title\n\n![diagram](photo.png)"),
         })];
         let visible = compute_visible_items(&nodes);
+        let flat_refs = compute_flat_refs(&nodes);
         let mut app = App {
             nodes,
             visible,
+            flat_refs,
             selected: 0,
+            present_index: 0,
             mode: crate::app::Mode::Browse,
             scroll: 0,
             should_quit: false,
@@ -801,7 +810,9 @@ mod tests {
                 let model = RenderModel {
                     nodes: &app.nodes,
                     visible: &app.visible,
+                    flat_refs: &app.flat_refs,
                     selected: app.selected,
+                    present_index: app.present_index,
                     mode: RenderMode::Browse,
                     scroll: app.scroll,
                 };
