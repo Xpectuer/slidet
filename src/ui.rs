@@ -12,7 +12,7 @@ use std::path::Path;
 
 use crate::{
     image::{self, ImageRender},
-    loader::Slide,
+    loader::{Slide, SlideNode, VisibleItem, VisibleItemKind},
     markdown::{self, SlideBlock},
 };
 
@@ -23,7 +23,8 @@ pub enum RenderMode {
 }
 
 pub struct RenderModel<'a> {
-    pub slides: &'a [Slide],
+    pub nodes: &'a [SlideNode],
+    pub visible: &'a [VisibleItem],
     pub selected: usize,
     pub mode: RenderMode,
     pub scroll: u16,
@@ -75,35 +76,98 @@ fn render_browse(
 ) {
     let areas = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(28), Constraint::Min(1)])
+        .constraints([Constraint::Length(32), Constraint::Min(1)])
         .split(frame.area());
 
-    let nav = model
-        .slides
+    let nav_lines: Vec<Line> = model
+        .visible
         .iter()
         .enumerate()
-        .map(|(idx, slide)| {
-            if idx == model.selected {
-                format!("> {}", slide.title)
-            } else {
-                format!("  {}", slide.title)
+        .map(|(idx, item)| {
+            let is_selected = idx == model.selected;
+            let prefix = if is_selected { "> " } else { "  " };
+            let indent = if item.depth == 1 { "  " } else { "" };
+
+            match &item.kind {
+                VisibleItemKind::RootLeaf { .. } | VisibleItemKind::GroupChild { .. } => {
+                    let title = item
+                        .slide_ref
+                        .as_ref()
+                        .map(|r| SlideNode::resolve_slide(model.nodes, r).title.as_str())
+                        .unwrap_or("?");
+                    let style = if item.depth == 1 {
+                        Style::default().fg(Color::Gray)
+                    } else {
+                        Style::default()
+                    };
+                    Line::styled(format!("{prefix}{indent}{title}"), style)
+                }
+                VisibleItemKind::Group {
+                    name,
+                    expanded,
+                    child_count,
+                } => {
+                    let arrow = if *expanded { "▼" } else { "▶" };
+                    let style = Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD);
+                    Line::styled(format!("{prefix}{indent}{arrow} {name} ({child_count})"), style)
+                }
             }
         })
-        .collect::<Vec<_>>()
-        .join("\n");
+        .collect();
 
     frame.render_widget(
-        Paragraph::new(nav).block(Block::default().title("Slides").borders(Borders::ALL)),
+        Paragraph::new(nav_lines).block(Block::default().title("Slides").borders(Borders::ALL)),
         areas[0],
     );
 
-    let current = model.slides[model.selected].clone();
-    let preview = Block::default()
-        .title(current.title.clone())
-        .borders(Borders::ALL);
-    let inner = preview.inner(areas[1]);
-    frame.render_widget(preview, areas[1]);
-    render_slide_blocks(frame, inner, model, image_states, &current);
+    let current_slide = model
+        .visible
+        .get(model.selected)
+        .and_then(|item| item.slide_ref.as_ref())
+        .map(|r| SlideNode::resolve_slide(model.nodes, r).clone());
+
+    match current_slide {
+        Some(current) => {
+            let preview = Block::default()
+                .title(current.title.clone())
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::White));
+            let inner = preview.inner(areas[1]);
+            frame.render_widget(preview, areas[1]);
+            render_slide_blocks(frame, inner, areas[1], model, image_states, &current);
+        }
+        None => {
+            // Group selected — show summary
+            let group_info = model.visible.get(model.selected).and_then(|item| {
+                if let VisibleItemKind::Group {
+                    name,
+                    child_count,
+                    expanded,
+                } = &item.kind
+                {
+                    Some((name.clone(), *child_count, *expanded))
+                } else {
+                    None
+                }
+            });
+            let text = match group_info {
+                Some((name, count, expanded)) => {
+                    let hint = if expanded { "Press Enter to collapse" } else { "Press Enter to expand" };
+                    format!("  {name}\n\n  {count} slides in this group\n\n  {hint}")
+                }
+                None => String::from("  No slide selected"),
+            };
+            let preview = Block::default()
+                .title("Group")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray));
+            let inner = preview.inner(areas[1]);
+            frame.render_widget(preview, areas[1]);
+            frame.render_widget(Paragraph::new(text), inner);
+        }
+    }
 }
 
 fn render_present(
@@ -111,43 +175,158 @@ fn render_present(
     model: &RenderModel<'_>,
     image_states: &mut dyn ImageStateStore,
 ) {
-    let current = model.slides[model.selected].clone();
-    render_slide_blocks(frame, frame.area(), model, image_states, &current);
+    let current = model
+        .visible
+        .get(model.selected)
+        .and_then(|item| item.slide_ref.as_ref())
+        .map(|r| SlideNode::resolve_slide(model.nodes, r).clone());
+
+    let Some(current) = current else {
+        return;
+    };
+
+    let content_width = frame.area().width.saturating_sub(2);
+    let content_height = slide_content_height(&current.raw_markdown, content_width);
+    let max_inner = frame.area().height.saturating_sub(2);
+
+    let border_height = if content_height > max_inner {
+        frame.area().height
+    } else {
+        content_height.saturating_add(3).min(frame.area().height)
+    };
+
+    let area = Rect {
+        height: border_height,
+        ..frame.area()
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::White));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    render_slide_blocks(frame, inner, area, model, image_states, &current);
 }
+
+fn slide_content_height(raw_markdown: &str, width: u16) -> u16 {
+    text_content_height(raw_markdown, width)
+}
+
+fn text_content_height(raw_markdown: &str, width: u16) -> u16 {
+    let mut total: u16 = 0;
+    for block in &markdown::parse_blocks(raw_markdown) {
+        if let SlideBlock::Markdown(_) = block {
+            total = total.saturating_add(block_height(block, width));
+            total = total.saturating_add(1);
+        }
+    }
+    total.max(1)
+}
+
+fn text_content_height_from_blocks(blocks: &[SlideBlock], width: u16) -> u16 {
+    let mut total: u16 = 0;
+    for block in blocks {
+        if let SlideBlock::Markdown(_) = block {
+            total = total.saturating_add(block_height(block, width));
+            total = total.saturating_add(1);
+        }
+    }
+    total.max(1)
+}
+
 
 fn render_slide_blocks(
     frame: &mut Frame,
-    area: Rect,
+    inner: Rect,
+    border_area: Rect,
     model: &RenderModel<'_>,
     image_states: &mut dyn ImageStateStore,
     current: &Slide,
 ) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-
     let base_dir = current
         .path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
-    let mut cursor_y = i32::from(area.y) - i32::from(model.scroll);
+    let blocks = markdown::parse_blocks(&current.raw_markdown);
 
-    for block in markdown::parse_blocks(&current.raw_markdown) {
-        let height = block_height(&block, area.width);
-        if let Some((visible, text_scroll)) = clip_rect(area, cursor_y, height) {
-            match block {
-                SlideBlock::Markdown(blocks) => {
-                    render_markdown_block(frame, visible, &blocks, text_scroll);
-                }
-                SlideBlock::Image { src, .. } => {
-                    render_image_block(frame, visible, image_states, base_dir, &src);
-                }
+    // Render text blocks inside the bordered area
+    render_text_blocks(frame, inner, model, &blocks);
+
+    // Render image blocks below the bordered area, or fallback inside if no space below
+    render_image_blocks_below(frame, border_area, inner, image_states, base_dir, model, &blocks);
+}
+
+fn render_text_blocks(
+    frame: &mut Frame,
+    area: Rect,
+    model: &RenderModel<'_>,
+    blocks: &[SlideBlock],
+) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let mut cursor_y = i32::from(area.y) - i32::from(model.scroll);
+    for block in blocks {
+        if let SlideBlock::Markdown(ref md_blocks) = block {
+            let height = block_height(block, area.width);
+            if let Some((visible, text_scroll)) = clip_rect(area, cursor_y, height) {
+                render_markdown_block(frame, visible, md_blocks, text_scroll);
+            }
+            cursor_y += i32::from(height) + 1;
+            if cursor_y >= i32::from(area.y + area.height) {
+                return;
             }
         }
+    }
+}
 
-        cursor_y += i32::from(height) + 1;
-        if cursor_y >= i32::from(area.y + area.height) {
-            break;
+fn render_image_blocks_below(
+    frame: &mut Frame,
+    border_area: Rect,
+    inner: Rect,
+    image_states: &mut dyn ImageStateStore,
+    base_dir: &Path,
+    model: &RenderModel<'_>,
+    blocks: &[SlideBlock],
+) {
+    // Images start below the border: y = border_area.y + border_area.height
+    let start_y = border_area.y + border_area.height;
+    let frame_bottom = frame.area().y + frame.area().height;
+    let has_space_below = start_y < frame_bottom;
+
+    let image_area = if has_space_below {
+        Rect {
+            y: start_y,
+            height: frame_bottom.saturating_sub(start_y),
+            x: border_area.x + 1,
+            width: border_area.width.saturating_sub(2),
+        }
+    } else {
+        // Fallback: render images inside the border, below text
+        let text_h = text_content_height_from_blocks(blocks, inner.width);
+        Rect {
+            y: inner.y + text_h,
+            height: inner.height.saturating_sub(text_h),
+            x: inner.x,
+            width: inner.width,
+        }
+    };
+
+    if image_area.width == 0 || image_area.height == 0 {
+        return;
+    }
+
+    let mut cursor_y = i32::from(image_area.y) - i32::from(model.scroll);
+    for block in blocks {
+        if let SlideBlock::Image { ref src, .. } = block {
+            let height = block_height(block, image_area.width);
+            if let Some((visible, _)) = clip_rect(image_area, cursor_y, height) {
+                render_image_block(frame, visible, image_states, base_dir, src);
+            }
+            cursor_y += i32::from(height) + 1;
+            if cursor_y >= i32::from(image_area.y + image_area.height) {
+                return;
+            }
         }
     }
 }
@@ -477,11 +656,12 @@ mod tests {
     use super::{render, RenderMode, RenderModel};
     use crate::{
         app::{App, ImageContext},
-        loader::Slide,
+        loader::{Slide, SlideNode, VisibleItem, VisibleItemKind, compute_visible_items},
     };
     use ratatui::{backend::TestBackend, Terminal};
     use ratatui_image::picker::Picker;
     use std::{
+        collections::HashMap,
         fs,
         path::{Path, PathBuf},
         time::{SystemTime, UNIX_EPOCH},
@@ -513,35 +693,42 @@ mod tests {
         }
     }
 
-    #[test]
-    fn render_outputs_text_and_missing_image_fallback_in_browse_mode() {
-        let dir = TempDir::new("ui-render");
-        let slides = vec![Slide {
-            path: dir.path().join("01.md"),
+    fn make_app_with_leaves(dir: &Path) -> App {
+        let nodes = vec![SlideNode::Leaf(Slide {
+            path: dir.join("01.md"),
             title: String::from("01"),
             raw_markdown: String::from("# Title\n\nBody\n\n![diagram](missing.png)"),
-        }];
-        let mut app = App {
-            slides,
+        })];
+        let visible = compute_visible_items(&nodes);
+        App {
+            nodes,
+            visible,
             selected: 0,
             mode: crate::app::Mode::Browse,
             scroll: 0,
             should_quit: false,
             image: ImageContext {
                 image_picker: None,
-                image_states: std::collections::HashMap::new(),
+                image_states: HashMap::new(),
             },
-            slides_dir: dir.path().to_path_buf(),
+            slides_dir: dir.to_path_buf(),
             watcher: None,
             reload_indicator: None,
-        };
+        }
+    }
+
+    #[test]
+    fn render_outputs_text_and_missing_image_fallback_in_browse_mode() {
+        let dir = TempDir::new("ui-render");
+        let mut app = make_app_with_leaves(dir.path());
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
             .draw(|frame| {
                 let model = RenderModel {
-                    slides: &app.slides,
+                    nodes: &app.nodes,
+                    visible: &app.visible,
                     selected: app.selected,
                     mode: RenderMode::Browse,
                     scroll: app.scroll,
@@ -571,20 +758,22 @@ mod tests {
         let previous = std::env::var_os("KITTY_WINDOW_ID");
         std::env::set_var("KITTY_WINDOW_ID", "test-window");
 
-        let slides = vec![Slide {
+        let nodes = vec![SlideNode::Leaf(Slide {
             path: dir.path().join("01.md"),
             title: String::from("01"),
             raw_markdown: String::from("# Title\n\n![diagram](photo.png)"),
-        }];
+        })];
+        let visible = compute_visible_items(&nodes);
         let mut app = App {
-            slides,
+            nodes,
+            visible,
             selected: 0,
             mode: crate::app::Mode::Browse,
             scroll: 0,
             should_quit: false,
             image: ImageContext {
                 image_picker: Some(Picker::from_fontsize((8, 16))),
-                image_states: std::collections::HashMap::new(),
+                image_states: HashMap::new(),
             },
             slides_dir: dir.path().to_path_buf(),
             watcher: None,
@@ -596,7 +785,8 @@ mod tests {
         terminal
             .draw(|frame| {
                 let model = RenderModel {
-                    slides: &app.slides,
+                    nodes: &app.nodes,
+                    visible: &app.visible,
                     selected: app.selected,
                     mode: RenderMode::Browse,
                     scroll: app.scroll,
