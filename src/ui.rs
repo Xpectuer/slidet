@@ -352,18 +352,18 @@ fn render_markdown_block(
     blocks: &[markdown::MarkdownBlock],
     text_scroll: u16,
 ) {
-    let rendered = render_markdown_text(blocks);
+    let rendered = render_markdown_text(blocks, area.width);
     let paragraph = Paragraph::new(rendered)
         .wrap(Wrap { trim: false })
         .scroll((text_scroll, 0));
     frame.render_widget(paragraph, area);
 }
 
-fn render_markdown_text(blocks: &[markdown::MarkdownBlock]) -> Text<'static> {
+fn render_markdown_text(blocks: &[markdown::MarkdownBlock], width: u16) -> Text<'static> {
     let mut lines = Vec::new();
 
     for (idx, block) in blocks.iter().enumerate() {
-        push_block_lines(&mut lines, block, "");
+        push_block_lines(&mut lines, block, "", width);
         if idx + 1 < blocks.len() && !line_is_blank(lines.last()) {
             lines.push(Line::default());
         }
@@ -380,7 +380,7 @@ fn render_markdown_text(blocks: &[markdown::MarkdownBlock]) -> Text<'static> {
     Text::from(lines)
 }
 
-fn push_block_lines(lines: &mut Vec<Line<'static>>, block: &markdown::MarkdownBlock, prefix: &str) {
+fn push_block_lines(lines: &mut Vec<Line<'static>>, block: &markdown::MarkdownBlock, prefix: &str, width: u16) {
     match block {
         markdown::MarkdownBlock::Heading { content, .. } => {
             let mut line = Line::from(prefixed_spans(prefix, render_inline_spans(content)));
@@ -396,12 +396,12 @@ fn push_block_lines(lines: &mut Vec<Line<'static>>, block: &markdown::MarkdownBl
         }
         markdown::MarkdownBlock::BulletList(items) => {
             for item in items {
-                push_list_item_lines(lines, item, prefix, None);
+                push_list_item_lines(lines, item, prefix, None, width);
             }
         }
         markdown::MarkdownBlock::OrderedList { start, items } => {
             for (idx, item) in items.iter().enumerate() {
-                push_list_item_lines(lines, item, prefix, Some(format!("{}. ", start + idx)));
+                push_list_item_lines(lines, item, prefix, Some(format!("{}. ", start + idx)), width);
             }
         }
         markdown::MarkdownBlock::Quote(blocks) => {
@@ -409,7 +409,7 @@ fn push_block_lines(lines: &mut Vec<Line<'static>>, block: &markdown::MarkdownBl
             let bar_style = Style::default().fg(Color::Cyan);
             let start = lines.len();
             for (idx, block) in blocks.iter().enumerate() {
-                push_block_lines(lines, block, &format!("{prefix}  "));
+                push_block_lines(lines, block, &format!("{prefix}  "), width);
                 if idx + 1 < blocks.len() && !line_is_blank(lines.last()) {
                     lines.push(Line::default());
                 }
@@ -442,26 +442,14 @@ fn push_block_lines(lines: &mut Vec<Line<'static>>, block: &markdown::MarkdownBl
             }
         }
         markdown::MarkdownBlock::Table(table) => {
-            lines.push(Line::from(format!(
-                "{prefix}> [table collapsed for terminal width]"
-            )));
-            for (row_idx, row) in table.rows.iter().enumerate() {
-                lines.push(Line::default());
-                lines.push(Line::styled(
-                    format!("{prefix}**Row {}**", row_idx + 1),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ));
-                for (col_idx, header) in table.headers.iter().enumerate() {
-                    let value = row
-                        .get(col_idx)
-                        .map(|cell| inline_plain_text(cell))
-                        .unwrap_or_default();
-                    lines.push(Line::from(format!(
-                        "{prefix}- {}: {}",
-                        inline_plain_text(header),
-                        value
-                    )));
-                }
+            let col_widths = markdown::calculate_column_widths(table);
+            let prefix_len = prefix.chars().map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)).sum::<usize>();
+            let available = width as usize;
+            let grid_needs = prefix_len + table_grid_width(&col_widths);
+            if available > 0 && grid_needs <= available {
+                lines.extend(render_table_grid(table, &col_widths, prefix));
+            } else {
+                lines.extend(render_table_collapsed(table, prefix));
             }
         }
         markdown::MarkdownBlock::ThematicBreak => {
@@ -481,6 +469,7 @@ fn push_list_item_lines(
     item: &markdown::ListItem,
     prefix: &str,
     ordered_prefix: Option<String>,
+    width: u16,
 ) {
     let list_prefix = ordered_prefix.unwrap_or_else(|| match item.checked {
         Some(true) => String::from("- [x] "),
@@ -499,7 +488,7 @@ fn push_list_item_lines(
         } else {
             format!("{prefix}{}", " ".repeat(list_prefix.chars().count()))
         };
-        push_block_lines(lines, block, &item_prefix);
+        push_block_lines(lines, block, &item_prefix, width);
     }
 }
 
@@ -567,6 +556,117 @@ fn inline_plain_text(spans: &[markdown::InlineSpan]) -> String {
         .collect::<String>()
 }
 
+fn pad_to_width(text: &str, width: usize) -> String {
+    use unicode_width::UnicodeWidthStr;
+    let display_w = UnicodeWidthStr::width(text);
+    if display_w >= width {
+        text.to_string()
+    } else {
+        let mut s = text.to_string();
+        s.push_str(&" ".repeat(width - display_w));
+        s
+    }
+}
+
+fn table_grid_width(col_widths: &[usize]) -> usize {
+    col_widths.iter().sum::<usize>() + col_widths.len() * 3 + 1
+}
+
+fn render_table_grid(
+    table: &markdown::TableBlock,
+    col_widths: &[usize],
+    prefix: &str,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+
+    let top_border = format!(
+        "{prefix}┌{}┐",
+        col_widths
+            .iter()
+            .map(|w| "─".repeat(*w + 2))
+            .collect::<Vec<_>>()
+            .join("┬")
+    );
+    lines.push(Line::from(top_border));
+
+    // Header row
+    let header_cells: Vec<String> = table
+        .headers
+        .iter()
+        .enumerate()
+        .map(|(i, h)| pad_to_width(&inline_plain_text(h), col_widths[i]))
+        .collect();
+    let header_line = format!("{prefix}│ {} │", header_cells.join(" │ "));
+    lines.push(Line::styled(header_line, Style::default().add_modifier(Modifier::BOLD)));
+
+    // Header separator: ├───┼───┤
+    let sep = format!(
+        "{prefix}├{}┤",
+        col_widths
+            .iter()
+            .map(|w| "─".repeat(*w + 2))
+            .collect::<Vec<_>>()
+            .join("┼")
+    );
+    lines.push(Line::from(sep));
+
+    // Data rows
+    for row in &table.rows {
+        let cells: Vec<String> = col_widths
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                row.get(i)
+                    .map(|cell| pad_to_width(&inline_plain_text(cell), col_widths[i]))
+                    .unwrap_or_else(|| " ".repeat(col_widths[i]))
+            })
+            .collect();
+        let row_line = format!("{prefix}│ {} │", cells.join(" │ "));
+        lines.push(Line::from(row_line));
+    }
+
+    // Bottom border: └───┴───┘
+    let bottom_border = format!(
+        "{prefix}└{}┘",
+        col_widths
+            .iter()
+            .map(|w| "─".repeat(*w + 2))
+            .collect::<Vec<_>>()
+            .join("┴")
+    );
+    lines.push(Line::from(bottom_border));
+
+    lines
+}
+
+fn render_table_collapsed(
+    table: &markdown::TableBlock,
+    prefix: &str,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(format!(
+        "{prefix}> [table collapsed for terminal width]"
+    ))];
+    for (row_idx, row) in table.rows.iter().enumerate() {
+        lines.push(Line::default());
+        lines.push(Line::styled(
+            format!("{prefix}**Row {}**", row_idx + 1),
+            Style::default().add_modifier(Modifier::BOLD),
+        ));
+        for (col_idx, header) in table.headers.iter().enumerate() {
+            let value = row
+                .get(col_idx)
+                .map(|cell| inline_plain_text(cell))
+                .unwrap_or_default();
+            lines.push(Line::from(format!(
+                "{prefix}- {}: {}",
+                inline_plain_text(header),
+                value
+            )));
+        }
+    }
+    lines
+}
+
 fn plain_line_text(line: &Line<'_>) -> String {
     line.spans
         .iter()
@@ -617,7 +717,7 @@ fn render_image_block(
 fn block_height(block: &SlideBlock, width: u16) -> u16 {
     match block {
         SlideBlock::Markdown(blocks) => {
-            let rendered = render_markdown_text(blocks);
+            let rendered = render_markdown_text(blocks, width);
             estimate_text_height(&rendered, width.max(1))
         }
         SlideBlock::Image { .. } => 12,
@@ -655,7 +755,7 @@ pub fn render_slide_content(base_dir: Option<&std::path::Path>, raw_markdown: &s
     markdown::parse_blocks(raw_markdown)
         .into_iter()
         .map(|block| match block {
-            SlideBlock::Markdown(blocks) => text_to_string(render_markdown_text(&blocks)),
+            SlideBlock::Markdown(blocks) => text_to_string(render_markdown_text(&blocks, 80)),
             SlideBlock::Image { src, .. } => {
                 let base = base_dir.unwrap_or_else(|| std::path::Path::new("."));
                 match image::prepare_image(base, &src) {

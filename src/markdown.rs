@@ -101,10 +101,10 @@ pub fn extract_headings(markdown: &str) -> Vec<String> {
         .collect()
 }
 
-pub fn preprocess_markdown(markdown: &str, _max_width: usize) -> String {
+pub fn preprocess_markdown(markdown: &str, max_width: usize) -> String {
     parse_markdown_blocks(markdown)
         .into_iter()
-        .map(block_to_plain_text)
+        .map(|block| block_to_plain_text(block, max_width))
         .collect::<Vec<_>>()
         .join("\n\n")
 }
@@ -588,7 +588,25 @@ fn inline_text(spans: &[InlineSpan]) -> String {
         .to_string()
 }
 
-fn block_to_plain_text(block: MarkdownBlock) -> String {
+pub fn calculate_column_widths(table: &TableBlock) -> Vec<usize> {
+    use unicode_width::UnicodeWidthStr;
+    let col_count = table.headers.len();
+    let mut widths = vec![0usize; col_count];
+    for (i, header) in table.headers.iter().enumerate() {
+        widths[i] = UnicodeWidthStr::width(inline_text(header).as_str());
+    }
+    for row in &table.rows {
+        for (i, cell) in row.iter().enumerate() {
+            if i < col_count {
+                let w = UnicodeWidthStr::width(inline_text(cell).as_str());
+                widths[i] = widths[i].max(w);
+            }
+        }
+    }
+    widths
+}
+
+fn block_to_plain_text(block: MarkdownBlock, max_width: usize) -> String {
     match block {
         MarkdownBlock::Heading { content, .. } | MarkdownBlock::Paragraph(content) => {
             inline_text(&content)
@@ -606,7 +624,7 @@ fn block_to_plain_text(block: MarkdownBlock) -> String {
             .join("\n"),
         MarkdownBlock::Quote(blocks) => blocks
             .into_iter()
-            .map(block_to_plain_text)
+            .map(|b| block_to_plain_text(b, max_width))
             .map(|line| format!("> {line}"))
             .collect::<Vec<_>>()
             .join("\n"),
@@ -614,7 +632,7 @@ fn block_to_plain_text(block: MarkdownBlock) -> String {
             Some(language) => format!("```{language}\n{code}```"),
             None => format!("```\n{code}```"),
         },
-        MarkdownBlock::Table(table) => table_to_plain_text(table),
+        MarkdownBlock::Table(table) => table_to_plain_text(&table, max_width),
         MarkdownBlock::ThematicBreak => String::from("---"),
     }
 }
@@ -631,20 +649,103 @@ fn list_item_to_plain_text(item: ListItem) -> String {
 fn list_item_body(item: ListItem) -> String {
     item.blocks
         .into_iter()
-        .map(block_to_plain_text)
+        .map(|b| block_to_plain_text(b, 0))
         .collect::<Vec<_>>()
         .join(" ")
 }
 
-fn table_to_plain_text(table: TableBlock) -> String {
+fn pad_to_width(text: &str, width: usize) -> String {
+    use unicode_width::UnicodeWidthStr;
+    let display_w = UnicodeWidthStr::width(text);
+    if display_w >= width {
+        text.to_string()
+    } else {
+        let mut s = text.to_string();
+        s.push_str(&" ".repeat(width - display_w));
+        s
+    }
+}
+
+fn table_grid_width(col_widths: &[usize]) -> usize {
+    col_widths.iter().sum::<usize>() + col_widths.len() * 3 + 1
+}
+
+fn table_to_plain_text(table: &TableBlock, max_width: usize) -> String {
+    let col_widths = calculate_column_widths(table);
+    let grid_needs = table_grid_width(&col_widths);
+    if max_width > 0 && grid_needs <= max_width {
+        table_to_grid_text(table, &col_widths)
+    } else {
+        table_to_collapsed_text(table)
+    }
+}
+
+fn table_to_grid_text(table: &TableBlock, col_widths: &[usize]) -> String {
+    let mut lines = Vec::new();
+
+    let top = format!(
+        "┌{}┐",
+        col_widths
+            .iter()
+            .map(|w| "─".repeat(*w + 2))
+            .collect::<Vec<_>>()
+            .join("┬")
+    );
+    lines.push(top);
+
+    let header_cells: Vec<String> = table
+        .headers
+        .iter()
+        .enumerate()
+        .map(|(i, h)| pad_to_width(&inline_text(h), col_widths[i]))
+        .collect();
+    lines.push(format!("│ {} │", header_cells.join(" │ ")));
+
+    let sep = format!(
+        "├{}┤",
+        col_widths
+            .iter()
+            .map(|w| "─".repeat(*w + 2))
+            .collect::<Vec<_>>()
+            .join("┼")
+    );
+    lines.push(sep);
+
+    for row in &table.rows {
+        let cells: Vec<String> = col_widths
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                row.get(i)
+                    .map(|cell| pad_to_width(&inline_text(cell), col_widths[i]))
+                    .unwrap_or_else(|| " ".repeat(col_widths[i]))
+            })
+            .collect();
+        lines.push(format!("│ {} │", cells.join(" │ ")));
+    }
+
+    let bottom = format!(
+        "└{}┘",
+        col_widths
+            .iter()
+            .map(|w| "─".repeat(*w + 2))
+            .collect::<Vec<_>>()
+            .join("┴")
+    );
+    lines.push(bottom);
+
+    lines.join("\n")
+}
+
+fn table_to_collapsed_text(table: &TableBlock) -> String {
     let mut rendered = vec![String::from("> [table collapsed for terminal width]")];
-    let headers = table
+    let headers: Vec<String> = table
         .headers
         .iter()
         .map(|cell| inline_text(cell))
-        .collect::<Vec<_>>();
+        .collect();
 
-    for (row_idx, row) in table.rows.into_iter().enumerate() {
+    for (row_idx, row) in table.rows.iter().enumerate() {
         rendered.push(String::new());
         rendered.push(format!("**Row {}**", row_idx + 1));
         for (col_idx, header) in headers.iter().enumerate() {
@@ -770,13 +871,47 @@ See [docs](https://docs.rs).\n\n\
 | --- | --- |\n\
 | Alice | Engineer |";
 
-        let rendered = preprocess_markdown(markdown, 24);
+        let rendered = preprocess_markdown(markdown, 10);
 
         assert!(rendered.contains("docs (https://docs.rs)"));
         assert!(rendered.contains("- [x] shipped"));
         assert!(rendered.contains("[table collapsed for terminal width]"));
         assert!(rendered.contains("- Name: Alice"));
         assert!(rendered.contains("- Role: Engineer"));
+    }
+
+    #[test]
+    fn preprocess_markdown_renders_table_grid_when_fits() {
+        let markdown = "\
+| Name | Status |\n\
+| --- | --- |\n\
+| Parser | Active |";
+
+        let rendered = preprocess_markdown(markdown, 80);
+
+        assert!(rendered.contains("┌"));
+        assert!(rendered.contains("│ Name"));
+        assert!(rendered.contains("│ Parser"));
+        assert!(!rendered.contains("[table collapsed"));
+    }
+
+    #[test]
+    fn calculate_column_widths_handles_cjk() {
+        let table = TableBlock {
+            headers: vec![
+                vec![InlineSpan::Text(String::from("模糊表达"))],
+                vec![InlineSpan::Text(String::from("显化表达"))],
+            ],
+            rows: vec![vec![
+                vec![InlineSpan::Text(String::from("弄好看一点"))],
+                vec![InlineSpan::Text(String::from("abc"))],
+            ]],
+        };
+        let widths = super::calculate_column_widths(&table);
+        // "模糊表达" = 8 display width, "弄好看一点" = 10 display width
+        assert_eq!(widths[0], 10);
+        // "显化表达" = 8 display width, "abc" = 3 display width
+        assert_eq!(widths[1], 8);
     }
 
     #[test]
