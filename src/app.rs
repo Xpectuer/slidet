@@ -112,9 +112,11 @@ impl App {
             Some(s) => s.path.clone(),
             None => return,
         };
-        if let Some(idx) = self.flat_refs.iter().position(|r| {
-            SlideNode::resolve_slide(&self.nodes, r).path == path
-        }) {
+        if let Some(idx) = self
+            .flat_refs
+            .iter()
+            .position(|r| SlideNode::resolve_slide(&self.nodes, r).path == path)
+        {
             self.present_index = idx;
         }
         self.mode = Mode::Present;
@@ -122,12 +124,9 @@ impl App {
     }
 
     fn exit_present_mode(&mut self) {
-        let path = SlideNode::resolve_slide(
-            &self.nodes,
-            &self.flat_refs[self.present_index],
-        )
-        .path
-        .clone();
+        let path = SlideNode::resolve_slide(&self.nodes, &self.flat_refs[self.present_index])
+            .path
+            .clone();
 
         // Auto-expand the group if the slide is inside a collapsed one
         if let SlideRef::InGroup { group_index, .. } = &self.flat_refs[self.present_index] {
@@ -314,7 +313,17 @@ pub fn run(
 
     while !app.should_quit {
         terminal.draw(|frame| {
-            let (nodes, visible, flat_refs, selected, present_index, mode, scroll, image, reload_indicator) = (
+            let (
+                nodes,
+                visible,
+                flat_refs,
+                selected,
+                present_index,
+                mode,
+                scroll,
+                image,
+                reload_indicator,
+            ) = (
                 &app.nodes,
                 &app.visible,
                 &app.flat_refs,

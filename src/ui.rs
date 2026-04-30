@@ -380,7 +380,12 @@ fn render_markdown_text(blocks: &[markdown::MarkdownBlock], width: u16) -> Text<
     Text::from(lines)
 }
 
-fn push_block_lines(lines: &mut Vec<Line<'static>>, block: &markdown::MarkdownBlock, prefix: &str, width: u16) {
+fn push_block_lines(
+    lines: &mut Vec<Line<'static>>,
+    block: &markdown::MarkdownBlock,
+    prefix: &str,
+    width: u16,
+) {
     match block {
         markdown::MarkdownBlock::Heading { content, .. } => {
             let mut line = Line::from(prefixed_spans(prefix, render_inline_spans(content)));
@@ -401,7 +406,13 @@ fn push_block_lines(lines: &mut Vec<Line<'static>>, block: &markdown::MarkdownBl
         }
         markdown::MarkdownBlock::OrderedList { start, items } => {
             for (idx, item) in items.iter().enumerate() {
-                push_list_item_lines(lines, item, prefix, Some(format!("{}. ", start + idx)), width);
+                push_list_item_lines(
+                    lines,
+                    item,
+                    prefix,
+                    Some(format!("{}. ", start + idx)),
+                    width,
+                );
             }
         }
         markdown::MarkdownBlock::Quote(blocks) => {
@@ -422,7 +433,11 @@ fn push_block_lines(lines: &mut Vec<Line<'static>>, block: &markdown::MarkdownBl
                 let old_style = old_spans.style;
                 spans.extend(old_spans.spans.into_iter());
                 let merged = old_style.patch(quote_style);
-                *line = Line { spans, style: merged, alignment: old_spans.alignment };
+                *line = Line {
+                    spans,
+                    style: merged,
+                    alignment: old_spans.alignment,
+                };
             }
         }
         markdown::MarkdownBlock::CodeBlock { language, code } => {
@@ -443,7 +458,10 @@ fn push_block_lines(lines: &mut Vec<Line<'static>>, block: &markdown::MarkdownBl
         }
         markdown::MarkdownBlock::Table(table) => {
             let col_widths = markdown::calculate_column_widths(table);
-            let prefix_len = prefix.chars().map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)).sum::<usize>();
+            let prefix_len = prefix
+                .chars()
+                .map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0))
+                .sum::<usize>();
             let available = width as usize;
             let grid_needs = prefix_len + table_grid_width(&col_widths);
             if available > 0 && grid_needs <= available {
@@ -597,7 +615,10 @@ fn render_table_grid(
         .map(|(i, h)| pad_to_width(&inline_plain_text(h), col_widths[i]))
         .collect();
     let header_line = format!("{prefix}│ {} │", header_cells.join(" │ "));
-    lines.push(Line::styled(header_line, Style::default().add_modifier(Modifier::BOLD)));
+    lines.push(Line::styled(
+        header_line,
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
 
     // Header separator: ├───┼───┤
     let sep = format!(
@@ -639,10 +660,7 @@ fn render_table_grid(
     lines
 }
 
-fn render_table_collapsed(
-    table: &markdown::TableBlock,
-    prefix: &str,
-) -> Vec<Line<'static>> {
+fn render_table_collapsed(table: &markdown::TableBlock, prefix: &str) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(format!(
         "{prefix}> [table collapsed for terminal width]"
     ))];

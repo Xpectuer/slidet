@@ -739,11 +739,7 @@ fn table_to_grid_text(table: &TableBlock, col_widths: &[usize]) -> String {
 
 fn table_to_collapsed_text(table: &TableBlock) -> String {
     let mut rendered = vec![String::from("> [table collapsed for terminal width]")];
-    let headers: Vec<String> = table
-        .headers
-        .iter()
-        .map(|cell| inline_text(cell))
-        .collect();
+    let headers: Vec<String> = table.headers.iter().map(|cell| inline_text(cell)).collect();
 
     for (row_idx, row) in table.rows.iter().enumerate() {
         rendered.push(String::new());
