@@ -159,7 +159,7 @@ main() {
   need_cmd install
 
   local suffix archive_name archive_url checksum_url
-  local install_dir tmp_dir archive_path checksum_path unpack_dir binary_path
+  local install_dir archive_path checksum_path unpack_dir binary_path
 
   suffix="$(detect_suffix)"
 
