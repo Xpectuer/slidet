@@ -405,11 +405,24 @@ fn push_block_lines(lines: &mut Vec<Line<'static>>, block: &markdown::MarkdownBl
             }
         }
         markdown::MarkdownBlock::Quote(blocks) => {
+            let quote_style = Style::default().bg(Color::DarkGray);
+            let bar_style = Style::default().fg(Color::Cyan);
+            let start = lines.len();
             for (idx, block) in blocks.iter().enumerate() {
-                push_block_lines(lines, block, &format!("{prefix}> "));
+                push_block_lines(lines, block, &format!("{prefix}  "));
                 if idx + 1 < blocks.len() && !line_is_blank(lines.last()) {
                     lines.push(Line::default());
                 }
+            }
+            // Apply quote styling: left bar + background
+            for line in lines.iter_mut().skip(start) {
+                let bar = Span::styled("│ ", bar_style);
+                let mut spans: Vec<Span<'static>> = vec![bar];
+                let old_spans = std::mem::take(line);
+                let old_style = old_spans.style;
+                spans.extend(old_spans.spans.into_iter());
+                let merged = old_style.patch(quote_style);
+                *line = Line { spans, style: merged, alignment: old_spans.alignment };
             }
         }
         markdown::MarkdownBlock::CodeBlock { language, code } => {
@@ -472,7 +485,7 @@ fn push_list_item_lines(
     let list_prefix = ordered_prefix.unwrap_or_else(|| match item.checked {
         Some(true) => String::from("- [x] "),
         Some(false) => String::from("- [ ] "),
-        None => String::from("- "),
+        None => String::from("• "),
     });
 
     if item.blocks.is_empty() {
