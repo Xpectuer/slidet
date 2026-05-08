@@ -193,6 +193,8 @@ fn render_present(
         return;
     };
 
+    const MIN_PRESENT_HEIGHT: u16 = 16;
+
     let content_width = frame.area().width.saturating_sub(2);
     let content_height = slide_content_height(&current.raw_markdown, content_width);
     let max_inner = frame.area().height.saturating_sub(2);
@@ -200,7 +202,10 @@ fn render_present(
     let border_height = if content_height > max_inner {
         frame.area().height
     } else {
-        content_height.saturating_add(3).min(frame.area().height)
+        content_height
+            .saturating_add(3)
+            .max(MIN_PRESENT_HEIGHT)
+            .min(frame.area().height)
     };
 
     let area = Rect {
@@ -256,14 +261,21 @@ fn render_slide_blocks(
         .unwrap_or_else(|| std::path::Path::new("."));
     let blocks = markdown::parse_blocks(&current.raw_markdown);
 
+    let padded_inner = Rect {
+        x: inner.x + 4,
+        y: inner.y,
+        width: inner.width.saturating_sub(4),
+        height: inner.height,
+    };
+
     // Render text blocks inside the bordered area
-    render_text_blocks(frame, inner, model, &blocks);
+    render_text_blocks(frame, padded_inner, model, &blocks);
 
     // Render image blocks below the bordered area, or fallback inside if no space below
     render_image_blocks_below(
         frame,
         border_area,
-        inner,
+        padded_inner,
         image_states,
         base_dir,
         model,
