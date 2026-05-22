@@ -595,4 +595,42 @@ mod tests {
 
         assert_eq!(app.image.image_states.len(), 1);
     }
+
+    #[test]
+    fn image_state_for_decodes_gif() {
+        let dir = TempDir::new("app-gif");
+        let image_path = dir.path().join("anim.gif");
+        image::DynamicImage::new_rgba8(1, 1)
+            .save(&image_path)
+            .unwrap();
+
+        let mut app = App::with_image_picker(
+            leaf_nodes(),
+            PathBuf::from("/tmp/test-slides"),
+            Some(Picker::from_fontsize((8, 16))),
+        );
+
+        let state = app.image_state_for(&image_path);
+        assert!(state.is_ok(), "GIF should be decodable");
+        assert_eq!(app.image.image_states.len(), 1);
+    }
+
+    #[test]
+    fn image_state_for_decodes_webp() {
+        let dir = TempDir::new("app-webp");
+        let image_path = dir.path().join("photo.webp");
+        image::DynamicImage::new_rgba8(1, 1)
+            .save(&image_path)
+            .unwrap();
+
+        let mut app = App::with_image_picker(
+            leaf_nodes(),
+            PathBuf::from("/tmp/test-slides"),
+            Some(Picker::from_fontsize((8, 16))),
+        );
+
+        let state = app.image_state_for(&image_path);
+        assert!(state.is_ok(), "WebP should be decodable");
+        assert_eq!(app.image.image_states.len(), 1);
+    }
 }

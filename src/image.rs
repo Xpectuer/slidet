@@ -130,6 +130,81 @@ mod tests {
     }
 
     #[test]
+    fn prepare_image_accepts_gif_when_terminal_supports_images() {
+        let dir = TempDir::new("image-gif");
+        fs::write(dir.path().join("anim.gif"), b"gif").unwrap();
+        let previous = std::env::var_os("KITTY_WINDOW_ID");
+        std::env::set_var("KITTY_WINDOW_ID", "test-window");
+
+        let render = prepare_image(dir.path(), "anim.gif").unwrap();
+
+        match previous {
+            Some(value) => std::env::set_var("KITTY_WINDOW_ID", value),
+            None => std::env::remove_var("KITTY_WINDOW_ID"),
+        }
+
+        assert_eq!(
+            render,
+            ImageRender::TerminalImage {
+                path: dir.path().join("anim.gif"),
+            }
+        );
+    }
+
+    #[test]
+    fn prepare_image_accepts_webp_when_terminal_supports_images() {
+        let dir = TempDir::new("image-webp");
+        fs::write(dir.path().join("photo.webp"), b"webp").unwrap();
+        let previous = std::env::var_os("KITTY_WINDOW_ID");
+        std::env::set_var("KITTY_WINDOW_ID", "test-window");
+
+        let render = prepare_image(dir.path(), "photo.webp").unwrap();
+
+        match previous {
+            Some(value) => std::env::set_var("KITTY_WINDOW_ID", value),
+            None => std::env::remove_var("KITTY_WINDOW_ID"),
+        }
+
+        assert_eq!(
+            render,
+            ImageRender::TerminalImage {
+                path: dir.path().join("photo.webp"),
+            }
+        );
+    }
+
+    #[test]
+    fn prepare_image_returns_fallback_for_gif_when_terminal_unsupported() {
+        let dir = TempDir::new("image-gif-fb");
+        fs::write(dir.path().join("anim.gif"), b"gif").unwrap();
+        let previous_kitty = std::env::var_os("KITTY_WINDOW_ID");
+        let previous_term = std::env::var_os("TERM_PROGRAM");
+        std::env::remove_var("KITTY_WINDOW_ID");
+        std::env::remove_var("TERM_PROGRAM");
+
+        let render = prepare_image(dir.path(), "anim.gif").unwrap();
+
+        match previous_kitty {
+            Some(value) => std::env::set_var("KITTY_WINDOW_ID", value),
+            None => std::env::remove_var("KITTY_WINDOW_ID"),
+        }
+        match previous_term {
+            Some(value) => std::env::set_var("TERM_PROGRAM", value),
+            None => std::env::remove_var("TERM_PROGRAM"),
+        }
+
+        assert_eq!(
+            render,
+            ImageRender::FallbackText {
+                message: format!(
+                    "[image unavailable] {}",
+                    dir.path().join("anim.gif").display()
+                ),
+            }
+        );
+    }
+
+    #[test]
     fn terminal_supports_images_accepts_ghostty() {
         let previous_kitty = std::env::var_os("KITTY_WINDOW_ID");
         let previous_term_program = std::env::var_os("TERM_PROGRAM");

@@ -204,6 +204,8 @@ pub fn terminal_supports_images() -> bool {
 }
 ```
 
+**支持的图片格式**: PNG, JPEG, GIF（静态第一帧）, WebP, BMP, TIFF 等 — 由 `image` crate 自动处理。不支持 SVG（降级为占位文本）。
+
 ### 配置文件
 
 | 文件 | 用途 | 配置项 |
