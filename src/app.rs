@@ -209,7 +209,33 @@ impl App {
                     self.scroll = 0;
                 }
             }
+            KeyCode::Char('o') => self.open_link_for_slide(),
             _ => {}
+        }
+    }
+
+    fn open_link_for_slide(&self) {
+        let markdown = match self.mode {
+            Mode::Browse => self.current_slide().map(|s| &s.raw_markdown),
+            Mode::Present => self
+                .flat_refs
+                .get(self.present_index)
+                .map(|r| &SlideNode::resolve_slide(&self.nodes, r).raw_markdown),
+        };
+
+        let Some(markdown) = markdown else {
+            return;
+        };
+
+        let links = crate::markdown::collect_links(markdown);
+        if links.is_empty() {
+            return;
+        }
+
+        for url in &links {
+            if let Err(e) = open::that(url) {
+                eprintln!("[open] failed to open {url}: {e}");
+            }
         }
     }
 

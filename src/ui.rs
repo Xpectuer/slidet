@@ -412,12 +412,18 @@ fn push_block_lines(
             )));
         }
         markdown::MarkdownBlock::BulletList(items) => {
-            for item in items {
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    lines.push(Line::default());
+                }
                 push_list_item_lines(lines, item, prefix, None, width);
             }
         }
         markdown::MarkdownBlock::OrderedList { start, items } => {
             for (idx, item) in items.iter().enumerate() {
+                if idx > 0 {
+                    lines.push(Line::default());
+                }
                 push_list_item_lines(
                     lines,
                     item,
@@ -549,15 +555,20 @@ fn render_inline_span(span: &markdown::InlineSpan) -> Vec<Span<'static>> {
             text.clone(),
             Style::default().fg(Color::Green).bg(Color::DarkGray),
         )],
-        markdown::InlineSpan::Link { label, destination } => vec![
-            Span::styled(
-                label.clone(),
-                Style::default()
-                    .fg(Color::LightBlue)
-                    .add_modifier(Modifier::UNDERLINED),
-            ),
-            Span::raw(format!(" ({destination})")),
-        ],
+        markdown::InlineSpan::Link { label, destination } => {
+            vec![
+                Span::styled(
+                    label.clone(),
+                    Style::default()
+                        .fg(Color::LightBlue)
+                        .add_modifier(Modifier::UNDERLINED),
+                ),
+                Span::styled(
+                    format!(" ({destination})"),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]
+        }
     }
 }
 
@@ -982,5 +993,30 @@ mod tests {
 
         assert!(screen.contains("Title"));
         assert!(!screen.contains("[image render]"));
+    }
+
+    #[test]
+    #[ignore = "debug helper, not a real test"]
+    fn debug_steam_engine_rendering() {
+        let md = "# 蒸汽机与 AI 模型\n\n\
+1712 年，纽科门造出第一台实用蒸汽机——只能用来抽煤矿积水。\n\
+**输出的力量不可控制，随时可能把机器撕碎。**\n\n\
+真正让蒸汽机成为通用原动力的，是瓦特的两件事：\n\n\
+- **平行运动连杆** — 把狂暴直线运动转化为温柔旋转\n\
+- **飞球调速器** — 利用离心力自动调节进气阀门\n\n\
+今天的 AI 模型就是当年的蒸汽机：**能力强大，但裸用起来横冲直撞。**\n\n\
+> 动手感受调速器：[瓦特飞球调速器交互演示](https://vibecodingapp.top/week3/watt-governor.html)\n\
+>\n\
+> 这节课，给你的 AI 搭档装上连杆和调速器。";
+        let blocks = crate::markdown::parse_markdown_blocks(md);
+        let text = super::render_markdown_text(&blocks, 80);
+        let mut out = String::new();
+        for line in &text.lines {
+            for span in &line.spans {
+                out.push_str(span.content.as_ref());
+            }
+            out.push('\n');
+        }
+        panic!("STEAM ENGINE RENDERED:\n---\n{}---", out);
     }
 }

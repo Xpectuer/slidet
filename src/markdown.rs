@@ -87,6 +87,55 @@ pub fn parse_blocks(markdown: &str) -> Vec<SlideBlock> {
     blocks
 }
 
+pub fn collect_links(markdown: &str) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    parse_markdown_blocks(markdown)
+        .iter()
+        .flat_map(block_links)
+        .filter(|url| seen.insert(url.clone()))
+        .collect()
+}
+
+fn block_links(block: &MarkdownBlock) -> Vec<String> {
+    match block {
+        MarkdownBlock::Heading { content, .. } | MarkdownBlock::Paragraph(content) => {
+            inline_links(content)
+        }
+        MarkdownBlock::BulletList(items) => items.iter().flat_map(list_item_links).collect(),
+        MarkdownBlock::OrderedList { items, .. } => {
+            items.iter().flat_map(list_item_links).collect()
+        }
+        MarkdownBlock::Quote(blocks) => blocks.iter().flat_map(block_links).collect(),
+        MarkdownBlock::Table(table) => {
+            let mut urls = Vec::new();
+            for header in &table.headers {
+                urls.extend(inline_links(header));
+            }
+            for row in &table.rows {
+                for cell in row {
+                    urls.extend(inline_links(cell));
+                }
+            }
+            urls
+        }
+        MarkdownBlock::CodeBlock { .. } | MarkdownBlock::ThematicBreak => Vec::new(),
+    }
+}
+
+fn list_item_links(item: &ListItem) -> Vec<String> {
+    item.blocks.iter().flat_map(block_links).collect()
+}
+
+fn inline_links(spans: &[InlineSpan]) -> Vec<String> {
+    spans
+        .iter()
+        .filter_map(|span| match span {
+            InlineSpan::Link { destination, .. } => Some(destination.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 pub fn extract_headings(markdown: &str) -> Vec<String> {
     parse_markdown_blocks(markdown)
         .into_iter()
