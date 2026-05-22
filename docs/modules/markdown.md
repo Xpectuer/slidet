@@ -4,9 +4,9 @@ module_name: markdown
 module_path: src/markdown.rs
 generated_by: mci-phase-2
 created: 2026-04-06
-updated: 2026-04-06
-revision: 1
-brief: Markdown 解析器，将文本转换为结构化块模型（SlideBlock/MarkdownBlock/InlineSpan），支持表格折叠和标题提取
+updated: 2026-05-23
+revision: 2
+brief: Markdown 解析器，将文本转换为结构化块模型（SlideBlock/MarkdownBlock/InlineSpan），支持表格折叠、标题提取和链接收集
 ---
 
 # markdown 模块文档
@@ -90,6 +90,21 @@ pub struct TableBlock {
 | `parse_markdown_blocks` | `fn(markdown: &str) -> Vec<MarkdownBlock>` | 解析为 MarkdownBlock 列表（不含图片提取） |
 | `extract_headings` | `fn(markdown: &str) -> Vec<String>` | 提取所有标题文本 |
 | `preprocess_markdown` | `fn(markdown: &str, max_width: usize) -> String` | 预处理为纯文本，折叠表格 |
+| `collect_links` | `fn(markdown: &str) -> Vec<String>` | 从所有块中收集唯一的链接 URL（去重） |
+
+### 链接收集（内部函数）
+
+`collect_links` 遍历解析后的 `MarkdownBlock` 树，递归收集所有 `InlineSpan::Link` 的 `destination`：
+
+| 函数 | 签名 | 说明 |
+|------|------|------|
+| `collect_links` | `fn(markdown: &str) -> Vec<String>` | 公开入口，解析后去重收集链接 |
+| `block_links` | `fn(block: &MarkdownBlock) -> Vec<String>` | 从单个块中提取链接（递归处理嵌套块） |
+| `list_item_links` | `fn(item: &ListItem) -> Vec<String>` | 从列表项中提取链接（递归处理嵌套块） |
+| `inline_links` | `fn(spans: &[InlineSpan]) -> Vec<String>` | 从行内 span 序列中提取 Link 的 destination |
+
+覆盖的块类型：Heading, Paragraph, BulletList, OrderedList, Quote, Table（包括表头和所有行）。
+不产生链接的块类型：CodeBlock, ThematicBreak（返回空 Vec）。
 
 <!-- END:INTERFACE -->
 

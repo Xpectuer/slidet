@@ -4,7 +4,8 @@ module_name: index
 module_path: docs/modules/
 generated_by: mci-phase-3
 created: 2026-04-06
-revision: 1
+updated: 2026-05-23
+revision: 2
 brief: slidet 项目模块文档总索引
 ---
 
@@ -33,7 +34,7 @@ slidet 是一个终端 Markdown 幻灯片播放器，使用 Rust 编写，支持
 | loader | [loader.md](loader.md) | 扫描目录，加载 .md 文件，按文件名字典序排序 | 无（叶子模块） |
 | markdown | [markdown.md](markdown.md) | 将 Markdown 解析为结构化块模型（SlideBlock/MarkdownBlock/InlineSpan） | 无（叶子模块） |
 | image | [image.md](image.md) | 检测终端图片能力，提供降级策略 | 无（叶子模块） |
-| app | [app.md](app.md) | 应用状态、事件循环、按键处理、图片状态缓存、热重载 | loader, ui, image, watcher |
+| app | [app.md](app.md) | 应用状态、事件循环、按键处理、图片状态缓存、热重载、链接打开 | loader, markdown, ui, image, watcher |
 | ui | [ui.md](ui.md) | Browse/Present 双模式渲染、文本滚动、图片渲染、重载指示器 | image, loader, markdown |
 | watcher | [watcher.md](watcher.md) | 文件系统监控，检测 .md 文件变更触发热重载 | 无（叶子模块） |
 
@@ -50,6 +51,7 @@ graph TD
     main --> ui
 
     app --> loader
+    app --> markdown
     app --> ui
     app --> image
     app --> watcher
@@ -98,6 +100,7 @@ graph TD
 | `parse_markdown_blocks` | `fn(markdown: &str) -> Vec<MarkdownBlock>` | 解析为 MarkdownBlock 列表 |
 | `extract_headings` | `fn(markdown: &str) -> Vec<String>` | 提取所有标题文本 |
 | `preprocess_markdown` | `fn(markdown: &str, max_width: usize) -> String` | 预处理为纯文本，折叠表格 |
+| `collect_links` | `fn(markdown: &str) -> Vec<String>` | 收集所有块中的唯一链接 URL（去重） |
 | `SlideBlock` | `enum { Markdown, Image }` | 顶层块类型 |
 | `MarkdownBlock` | `enum { Heading, Paragraph, BulletList, ... }` | Markdown 内容块 |
 | `InlineSpan` | `enum { Text, Strong, Emphasis, ... }` | 行内元素 |
@@ -121,6 +124,7 @@ graph TD
 | `App::previous_slide` | `fn(&mut self)` | 切换到上一张 |
 | `App::handle_key` | `fn(&mut self, code: KeyCode)` | 处理键盘事件 |
 | `App::reload_slides` | `fn(&mut self)` | 从磁盘重新加载幻灯片，保持当前位置 |
+| `App::open_link_for_slide` | `fn(&self)` | 收集当前 slide 链接并通过系统浏览器打开 |
 | `App::image_state_for` | `fn(&mut self, path: &Path) -> Result<&mut StatefulProtocol>` | 获取图片渲染状态 |
 | `Mode` | `enum { Browse, Present }` | 显示模式 |
 | `App` | `struct { slides, selected, mode, scroll, should_quit, image, slides_dir, watcher, reload_indicator }` | 应用状态 |
@@ -157,7 +161,7 @@ graph TD
 | markdown | 无 | ✅ 确认，仅依赖 pulldown-cmark 和 std |
 | image | 无 | ✅ 确认，仅依赖 std 和 anyhow |
 | watcher | 无 | ✅ 确认，仅依赖 notify-debouncer-mini 和 std |
-| app | loader, ui, image, watcher | ✅ 确认，使用 Slide、render()、terminal_supports_images()、SlideWatcher |
+| app | loader, markdown, ui, image, watcher | ✅ 确认，使用 Slide、collect_links()、render()、terminal_supports_images()、SlideWatcher |
 | ui | image, loader, markdown | ✅ 确认，使用 RenderModel/ImageStateStore 与图片、加载、Markdown 类型 |
 
 ### 循环依赖分析

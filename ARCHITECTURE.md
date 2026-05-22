@@ -4,8 +4,8 @@ doc_type: architecture
 brief: 终端 Markdown 幻灯片播放器的系统架构概览
 confidence: verified
 created: 2026-04-06
-updated: 2026-04-25
-revision: 3
+updated: 2026-05-23
+revision: 4
 ---
 
 <!-- BEGIN:architecture -->
@@ -41,6 +41,7 @@ revision: 3
 - `ratatui-image` (4): 终端图片渲染
 - `unicode-width` (0.2): Unicode 字符宽度计算
 - `notify-debouncer-mini` (0.5): 跨平台文件系统事件去重，用于热重载
+- `open` (5): 跨平台系统浏览器打开链接（`open::that()`）
 
 **构建工具**: Cargo
 
@@ -82,14 +83,34 @@ revision: 3
 **日期**: 2026-04-06
 **相关文档**: `docs/lessons/unified-markdown-pipeline.md`
 
+### 终端链接渲染：显示 URL + 终端自动检测
+
+**决策**: 在 Markdown 链接渲染时，将 URL 以可见文本（灰色）展示在标签后面，让终端自动检测为可点击链接；同时提供 `o` 键通过系统浏览器打开链接作为 fallback。
+
+**背景**: 最初尝试使用 OSC 8 终端超链接转义序列嵌入 `ratatui::Span` 内容中，但 ratatui 的 cell-based 布局将所有转义字符（`]`, `;`, `\` 等）计为显示宽度，导致布局严重错乱。
+
+**理由**:
+- 现代终端（iTerm2, Kitty, WezTerm, Terminal.app, Windows Terminal）自动检测可见文本中的 URL 并使其 Cmd+Click 可点击
+- 灰色 URL 显示不会干扰阅读流，同时保持机器可读性
+- `o` 键 fallback 覆盖了无鼠标或 URL 检测不可用的场景
+- 无需引入 ratatui 框架无法原生支持的转义序列 hack
+
+**权衡**:
+- URL 占据屏幕空间（通过灰色调缓解视觉干扰）
+- 需要额外快捷键（`o`）供用户学习
+- 在链接密集的幻灯片中可能显得拥挤
+
+**日期**: 2026-05-23
+**相关文档**: `docs/lessons/ratatui-link-rendering.md`
+
 ## 核心模块（一级）
 
 | 模块 | 文件 | 职责 |
 |------|------|------|
 | **loader** | `src/loader.rs` | 扫描目录，加载 `.md` 文件，按文件名字典序排序 |
-| **markdown** | `src/markdown.rs` | 将 Markdown 解析为结构化块模型（`MarkdownBlock` + `InlineSpan`），处理表格折叠，提取标题 |
+| **markdown** | `src/markdown.rs` | 将 Markdown 解析为结构化块模型（`MarkdownBlock` + `InlineSpan`），处理表格折叠，提取标题，收集链接 |
 | **image** | `src/image.rs` | 检测终端图片能力，提供降级策略，处理 SVG 不支持场景 |
-| **app** | `src/app.rs` | 应用状态、事件循环、按键处理、图片状态缓存、热重载 |
+| **app** | `src/app.rs` | 应用状态、事件循环、按键处理、图片状态缓存、热重载、链接打开（`o` 键） |
 | **ui** | `src/ui.rs` | Browse/Present 两种视图渲染、文本滚动、图片渲染、重载指示器 |
 | **watcher** | `src/watcher.rs` | 文件系统监控，检测 .md 文件变更触发热重载 |
 
@@ -145,6 +166,22 @@ Markdown 包含 ![alt](image.png)
       → 检查是否为 SVG → 是 → FallbackText: "[svg unsupported]"
       → 检查终端是否支持图片 → 不支持 → FallbackText: "[image unavailable]"
       → 终端支持 → TerminalImage { path }
+```
+
+### 主要使用场景：链接打开（o 键）
+
+```
+用户按 o 键
+  → app.rs:handle_key(KeyCode::Char('o'))
+    → app.open_link_for_slide()
+      → 根据 mode 获取当前 slide 的 raw_markdown
+      → markdown::collect_links(raw_markdown)
+        → parse_markdown_blocks() → MarkdownBlock 树
+        → block_links() 递归遍历所有块（Heading, Paragraph, List, Quote, Table）
+        → inline_links() 提取 InlineSpan::Link::destination
+        → HashSet 去重
+      → 对每个 URL 调用 open::that(url) 在系统浏览器打开
+      → 失败时输出 eprintln 到 stderr
 ```
 
 ## 配置驱动的逻辑

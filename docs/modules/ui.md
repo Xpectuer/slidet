@@ -4,8 +4,8 @@ module_name: ui
 module_path: src/ui.rs
 generated_by: mci-phase-2
 created: 2026-04-06
-updated: 2026-04-25
-revision: 3
+updated: 2026-05-23
+revision: 4
 ---
 
 # ui Module
@@ -145,7 +145,8 @@ render() ──┬── RenderMode::Browse ──► render_browse()
 | `render_markdown_block()` | `    ` (4 spaces) | 代码块缩进 |
 | `heading_style()` | `Color::LightYellow` | 标题颜色 |
 | `render_inline_span()` | `Color::Green` / `Color::DarkGray` | 行内代码颜色 |
-| `render_inline_span()` | `Color::LightBlue` | 链接颜色 |
+| `render_inline_span()` | `Color::LightBlue` + `Modifier::UNDERLINED` | 链接标签颜色和样式 |
+| `render_inline_span()` | `Color::DarkGray` | 链接 URL 颜色（让终端自动检测为可点击链接，避开 OSC 8 的 ratatui 不兼容问题） |
 | `render_reload_indicator()` | `Color::Green` + `Modifier::BOLD` | 重载指示器文字样式 |
 | `render_reload_indicator()` | `width + 2`, `height - 2` | 右下角偏移位置 |
 
