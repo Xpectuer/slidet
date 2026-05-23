@@ -996,6 +996,413 @@ mod tests {
     }
 
     #[test]
+    fn render_content_after_nested_bullet_list_in_browse_mode() {
+        let dir = TempDir::new("ui-nested-bullet");
+        let nodes = vec![SlideNode::Leaf(Slide {
+            path: dir.path().join("01.md"),
+            title: String::from("01"),
+            raw_markdown: String::from(
+                "# Title\n\n- item 1\n  - sub a\n  - sub b\n- item 2\n\nafter list",
+            ),
+        })];
+        let visible = compute_visible_items(&nodes);
+        let flat_refs = compute_flat_refs(&nodes);
+        let mut app = App {
+            nodes,
+            visible,
+            flat_refs,
+            selected: 0,
+            present_index: 0,
+            mode: crate::app::Mode::Browse,
+            scroll: 0,
+            should_quit: false,
+            image: ImageContext {
+                image_picker: None,
+                image_states: HashMap::new(),
+            },
+            slides_dir: dir.path().to_path_buf(),
+            watcher: None,
+            reload_indicator: None,
+        };
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                let model = RenderModel {
+                    nodes: &app.nodes,
+                    visible: &app.visible,
+                    flat_refs: &app.flat_refs,
+                    selected: app.selected,
+                    present_index: app.present_index,
+                    mode: RenderMode::Browse,
+                    scroll: app.scroll,
+                };
+                render(frame, &model, &mut app.image)
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let screen = buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(screen.contains("sub a"), "nested bullet 'sub a' missing");
+        assert!(screen.contains("sub b"), "nested bullet 'sub b' missing");
+        assert!(
+            screen.contains("after list"),
+            "content after nested bullet list was NOT rendered. Screen:\n{screen}"
+        );
+    }
+
+    #[test]
+    fn render_text_after_image_in_browse() {
+        let dir = TempDir::new("ui-text-after-img");
+        let nodes = vec![SlideNode::Leaf(Slide {
+            path: dir.path().join("01.md"),
+            title: String::from("01"),
+            raw_markdown: String::from(
+                "# Title\n\nbefore image\n\n![diagram](missing.png)\n\nafter image",
+            ),
+        })];
+        let visible = compute_visible_items(&nodes);
+        let flat_refs = compute_flat_refs(&nodes);
+        let mut app = App {
+            nodes,
+            visible,
+            flat_refs,
+            selected: 0,
+            present_index: 0,
+            mode: crate::app::Mode::Browse,
+            scroll: 0,
+            should_quit: false,
+            image: ImageContext {
+                image_picker: None,
+                image_states: HashMap::new(),
+            },
+            slides_dir: dir.path().to_path_buf(),
+            watcher: None,
+            reload_indicator: None,
+        };
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                let model = RenderModel {
+                    nodes: &app.nodes,
+                    visible: &app.visible,
+                    flat_refs: &app.flat_refs,
+                    selected: app.selected,
+                    present_index: app.present_index,
+                    mode: RenderMode::Browse,
+                    scroll: app.scroll,
+                };
+                render(frame, &model, &mut app.image)
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let screen = buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(screen.contains("before image"), "text before image missing");
+        assert!(
+            screen.contains("after image"),
+            "text after image lost — likely cursor overlap bug. Screen:\n---\n{screen}\n---"
+        );
+    }
+
+    #[test]
+    fn render_after_hot_reload_with_nested_bullets() {
+        let dir = TempDir::new("ui-reload-nested");
+        let slide_path = dir.path().join("01.md");
+
+        // Write initial content
+        std::fs::write(
+            &slide_path,
+            "# Title\n\n- item 1\n  - sub a\n  - sub b\n- item 2\n\nafter list",
+        )
+        .unwrap();
+
+        let nodes = crate::loader::load_slides(dir.path()).unwrap();
+        let visible = compute_visible_items(&nodes);
+        let flat_refs = compute_flat_refs(&nodes);
+        let mut app = App {
+            nodes,
+            visible,
+            flat_refs,
+            selected: 0,
+            present_index: 0,
+            mode: crate::app::Mode::Browse,
+            scroll: 0,
+            should_quit: false,
+            image: ImageContext {
+                image_picker: None,
+                image_states: HashMap::new(),
+            },
+            slides_dir: dir.path().to_path_buf(),
+            watcher: None,
+            reload_indicator: None,
+        };
+
+        // Simulate hot reload: write new content and reload
+        std::fs::write(
+            &slide_path,
+            "# Title Updated\n\n- item 1\n  - sub a\n  - sub b\n- item 2\n\nafter list\n\nextra line",
+        )
+        .unwrap();
+        app.reload_slides();
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                let model = RenderModel {
+                    nodes: &app.nodes,
+                    visible: &app.visible,
+                    flat_refs: &app.flat_refs,
+                    selected: app.selected,
+                    present_index: app.present_index,
+                    mode: RenderMode::Browse,
+                    scroll: app.scroll,
+                };
+                render(frame, &model, &mut app.image)
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let screen = buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(
+            screen.contains("Title Updated"),
+            "updated title missing after reload"
+        );
+        assert!(
+            screen.contains("sub a"),
+            "nested bullet 'sub a' missing after reload"
+        );
+        assert!(
+            screen.contains("after list"),
+            "content after nested bullet list lost after reload. Screen:\n---\n{screen}\n---"
+        );
+        assert!(
+            screen.contains("extra line"),
+            "'extra line' missing after reload. Screen:\n---\n{screen}\n---"
+        );
+    }
+
+    #[test]
+    fn render_present_mode_with_nested_bullets_shows_all_content() {
+        let dir = TempDir::new("ui-present-nested");
+        let nodes = vec![SlideNode::Leaf(Slide {
+            path: dir.path().join("01.md"),
+            title: String::from("01"),
+            raw_markdown: String::from(
+                "# Title\n\n- item 1\n  - sub a\n  - sub b\n- item 2\n\nafter list\n\nfinal paragraph",
+            ),
+        })];
+        let visible = compute_visible_items(&nodes);
+        let flat_refs = compute_flat_refs(&nodes);
+        let mut app = App {
+            nodes,
+            visible,
+            flat_refs,
+            selected: 0,
+            present_index: 0,
+            mode: crate::app::Mode::Present,
+            scroll: 0,
+            should_quit: false,
+            image: ImageContext {
+                image_picker: None,
+                image_states: HashMap::new(),
+            },
+            slides_dir: dir.path().to_path_buf(),
+            watcher: None,
+            reload_indicator: None,
+        };
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                let model = RenderModel {
+                    nodes: &app.nodes,
+                    visible: &app.visible,
+                    flat_refs: &app.flat_refs,
+                    selected: app.selected,
+                    present_index: app.present_index,
+                    mode: RenderMode::Present,
+                    scroll: app.scroll,
+                };
+                render(frame, &model, &mut app.image)
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let screen = buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(screen.contains("sub a"), "nested bullet missing in Present");
+        assert!(
+            screen.contains("after list"),
+            "content after nested list lost in Present mode. Screen:\n---\n{screen}\n---"
+        );
+        assert!(
+            screen.contains("final paragraph"),
+            "final paragraph lost in Present mode"
+        );
+    }
+
+    #[test]
+    fn slide_content_height_matches_actual_rendering() {
+        // Verify block_height produces correct total for nested content
+        let raw_md = "- item 1\n  - sub a\n  - sub b\n- item 2\n\nafter list";
+        let blocks = crate::markdown::parse_blocks(raw_md);
+
+        // Collect all text lines from rendered output
+        let mut total_lines: u16 = 0;
+        for block in &blocks {
+            if let crate::markdown::SlideBlock::Markdown(ref md_blocks) = block {
+                let text = super::render_markdown_text(md_blocks, 80);
+                let lines: Vec<String> = text
+                    .lines
+                    .iter()
+                    .map(|l| {
+                        l.spans
+                            .iter()
+                            .map(|s| s.content.as_ref())
+                            .collect::<String>()
+                    })
+                    .collect();
+                total_lines += lines.len() as u16;
+            }
+        }
+
+        let height = super::text_content_height(raw_md, 80);
+        // text_content_height adds +1 per block, so it should be >= raw line count
+        // and < raw line count + block count
+        assert!(
+            height >= total_lines,
+            "height {height} < actual lines {total_lines} — content would be clipped!"
+        );
+    }
+
+    #[test]
+    fn reload_preserves_content_when_adding_nested_bullets() {
+        let dir = TempDir::new("ui-reload-add-nested");
+        let slide_path = dir.path().join("01.md");
+
+        // Step 1: create a simple slide without nested bullets
+        std::fs::write(&slide_path, "# Title\n\n- item 1\n- item 2\n\nafter list").unwrap();
+
+        let nodes = crate::loader::load_slides(dir.path()).unwrap();
+        let visible = compute_visible_items(&nodes);
+        let flat_refs = compute_flat_refs(&nodes);
+        let mut app = App {
+            nodes,
+            visible,
+            flat_refs,
+            selected: 0,
+            present_index: 0,
+            mode: crate::app::Mode::Browse,
+            scroll: 0,
+            should_quit: false,
+            image: ImageContext {
+                image_picker: None,
+                image_states: HashMap::new(),
+            },
+            slides_dir: dir.path().to_path_buf(),
+            watcher: None,
+            reload_indicator: None,
+        };
+
+        // Step 2: verify initial content
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                let model = RenderModel {
+                    nodes: &app.nodes,
+                    visible: &app.visible,
+                    flat_refs: &app.flat_refs,
+                    selected: app.selected,
+                    present_index: app.present_index,
+                    mode: RenderMode::Browse,
+                    scroll: app.scroll,
+                };
+                render(frame, &model, &mut app.image)
+            })
+            .unwrap();
+        let screen = terminal.backend().buffer().clone();
+        let screen_str: String = screen.content().iter().map(|c| c.symbol()).collect();
+        assert!(
+            screen_str.contains("after list"),
+            "initial: 'after list' missing"
+        );
+
+        // Step 3: edit file — add nested bullets
+        std::fs::write(
+            &slide_path,
+            "# Title Updated\n\n- item 1\n  - sub a\n  - sub b\n- item 2\n\nafter list\n\nnew paragraph",
+        )
+        .unwrap();
+
+        // Step 4: simulate hot reload
+        app.reload_slides();
+
+        // Step 5: verify ALL content survived the reload
+        let backend2 = TestBackend::new(80, 24);
+        let mut terminal2 = Terminal::new(backend2).unwrap();
+        terminal2
+            .draw(|frame| {
+                let model = RenderModel {
+                    nodes: &app.nodes,
+                    visible: &app.visible,
+                    flat_refs: &app.flat_refs,
+                    selected: app.selected,
+                    present_index: app.present_index,
+                    mode: RenderMode::Browse,
+                    scroll: app.scroll,
+                };
+                render(frame, &model, &mut app.image)
+            })
+            .unwrap();
+        let screen2 = terminal2.backend().buffer().clone();
+        let screen_str2: String = screen2.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            screen_str2.contains("Title Updated"),
+            "after reload: updated title missing"
+        );
+        assert!(
+            screen_str2.contains("sub a"),
+            "after reload: nested bullet 'sub a' missing"
+        );
+        assert!(
+            screen_str2.contains("sub b"),
+            "after reload: nested bullet 'sub b' missing"
+        );
+        assert!(
+            screen_str2.contains("after list"),
+            "after reload: 'after list' lost when nested bullets were added. Screen:\n---\n{screen_str2}\n---"
+        );
+        assert!(
+            screen_str2.contains("new paragraph"),
+            "after reload: 'new paragraph' lost"
+        );
+    }
+
+    #[test]
     #[ignore = "debug helper, not a real test"]
     fn debug_steam_engine_rendering() {
         let md = "# 蒸汽机与 AI 模型\n\n\

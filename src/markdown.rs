@@ -261,6 +261,22 @@ fn parse_block_sequence<'a>(
             Event::SoftBreak | Event::HardBreak => {
                 *index += 1;
             }
+            Event::Html(html) => {
+                // Skip HTML comments; render other block-level HTML as paragraph
+                let html_str = html.to_string();
+                let trimmed = html_str.trim();
+                if !trimmed.starts_with("<!--") && !trimmed.is_empty() {
+                    blocks.push(MarkdownBlock::Paragraph(vec![InlineSpan::Text(html_str)]));
+                }
+                *index += 1;
+            }
+            Event::DisplayMath(math) => {
+                blocks.push(MarkdownBlock::CodeBlock {
+                    language: Some("math".into()),
+                    code: math.to_string(),
+                });
+                *index += 1;
+            }
             _ => {
                 *index += 1;
             }
@@ -358,6 +374,21 @@ fn parse_list_item<'a>(events: &[Event<'a>], index: &mut usize) -> ListItem {
                 *index += 1;
             }
             Event::SoftBreak | Event::HardBreak => {
+                *index += 1;
+            }
+            Event::Html(html) => {
+                let html_str = html.to_string();
+                let trimmed = html_str.trim();
+                if !trimmed.starts_with("<!--") && !trimmed.is_empty() {
+                    blocks.push(MarkdownBlock::Paragraph(vec![InlineSpan::Text(html_str)]));
+                }
+                *index += 1;
+            }
+            Event::DisplayMath(math) => {
+                blocks.push(MarkdownBlock::CodeBlock {
+                    language: Some("math".into()),
+                    code: math.to_string(),
+                });
                 *index += 1;
             }
             _ => {
@@ -492,6 +523,21 @@ fn parse_inline_sequence<'a>(
                     push_text(&mut spans, alt);
                 }
             }
+            Event::InlineHtml(html) => {
+                let html_str = html.to_string();
+                if !html_str.trim().starts_with("<!--") {
+                    push_text(&mut spans, html_str);
+                }
+                *index += 1;
+            }
+            Event::FootnoteReference(label) => {
+                push_text(&mut spans, format!("[^{}]", label));
+                *index += 1;
+            }
+            Event::InlineMath(math) => {
+                spans.push(InlineSpan::Code(format!("${}$", math)));
+                *index += 1;
+            }
             _ => {
                 *index += 1;
             }
@@ -542,6 +588,20 @@ fn collect_inline_text<'a>(events: &[Event<'a>], index: &mut usize, end_tag: Tag
             Event::Start(Tag::Image { .. }) => {
                 *index += 1;
                 text.push_str(&collect_inline_text(events, index, TagEnd::Image));
+            }
+            Event::InlineHtml(html) => {
+                if !html.trim().starts_with("<!--") {
+                    text.push_str(html);
+                }
+                *index += 1;
+            }
+            Event::FootnoteReference(label) => {
+                text.push_str(&format!("[^{}]", label));
+                *index += 1;
+            }
+            Event::InlineMath(math) => {
+                text.push_str(&format!("${}$", math));
+                *index += 1;
             }
             _ => {
                 *index += 1;
@@ -953,6 +1013,209 @@ See [docs](https://docs.rs).\n\n\
         assert_eq!(widths[0], 10);
         // "显化表达" = 8 display width, "abc" = 3 display width
         assert_eq!(widths[1], 8);
+    }
+
+    #[test]
+    fn parse_nested_bullet_list_with_content_after() {
+        let markdown = "- item 1\n  - sub a\n  - sub b\n- item 2\n\nafter list";
+        let blocks = parse_markdown_blocks(markdown);
+
+        assert_eq!(
+            blocks,
+            vec![
+                MarkdownBlock::BulletList(vec![
+                    ListItem {
+                        checked: None,
+                        blocks: vec![
+                            MarkdownBlock::Paragraph(vec![InlineSpan::Text("item 1".into())]),
+                            MarkdownBlock::BulletList(vec![
+                                ListItem {
+                                    checked: None,
+                                    blocks: vec![MarkdownBlock::Paragraph(vec![InlineSpan::Text(
+                                        "sub a".into()
+                                    )])],
+                                },
+                                ListItem {
+                                    checked: None,
+                                    blocks: vec![MarkdownBlock::Paragraph(vec![InlineSpan::Text(
+                                        "sub b".into()
+                                    )])],
+                                },
+                            ]),
+                        ],
+                    },
+                    ListItem {
+                        checked: None,
+                        blocks: vec![MarkdownBlock::Paragraph(vec![InlineSpan::Text(
+                            "item 2".into()
+                        )])],
+                    },
+                ]),
+                MarkdownBlock::Paragraph(vec![InlineSpan::Text("after list".into())]),
+            ],
+            "content after nested bullet list must be parsed"
+        );
+    }
+
+    #[test]
+    fn parse_nested_bullet_with_content_before_and_after() {
+        let markdown = "intro paragraph\n\n- item 1\n  - sub a\n  - sub b\n- item 2\n\nafter list";
+        let blocks = parse_markdown_blocks(markdown);
+
+        assert_eq!(
+            blocks.len(),
+            3,
+            "should have 3 top-level blocks: paragraph, bullet list, paragraph. Got: {blocks:?}"
+        );
+        assert_eq!(
+            blocks[2],
+            MarkdownBlock::Paragraph(vec![InlineSpan::Text("after list".into())]),
+            "content after nested bullet list was lost. Got: {:?}",
+            blocks[2]
+        );
+    }
+
+    #[test]
+    fn parse_mixed_ordered_unordered_nested_lists() {
+        let markdown =
+            "- bullet\n  1. ordered sub 1\n  2. ordered sub 2\n- bullet 2\n\nfinal paragraph";
+        let blocks = parse_markdown_blocks(markdown);
+
+        assert_eq!(
+            blocks.len(),
+            2,
+            "should have 2 blocks: mixed nested list and paragraph"
+        );
+        assert_eq!(
+            blocks[1],
+            MarkdownBlock::Paragraph(vec![InlineSpan::Text("final paragraph".into())]),
+            "paragraph after mixed nested list was lost"
+        );
+    }
+
+    #[test]
+    fn parse_markdown_with_html_comment_inside_list() {
+        let markdown = "- item 1\n  <!-- comment -->\n  - sub a\n- item 2\n\nafter";
+        let blocks = parse_markdown_blocks(markdown);
+        // HTML comments should be parsed (they become InlineHtml events which are handled)
+        assert!(
+            blocks.len() >= 2,
+            "expected at least 2 blocks, got {blocks:?}"
+        );
+    }
+
+    #[test]
+    fn parse_markdown_with_text_after_list_no_blank_line() {
+        // Some markdown parsers require blank line before new block after list,
+        // but pulldown-cmark is more lenient
+        let markdown = "- item 1\n- item 2\ntext without blank line";
+        let blocks = parse_markdown_blocks(markdown);
+        // pulldown-cmark: the "text without blank line" is a continuation of item 2
+        // This is expected behavior - just documenting it
+        assert!(!blocks.is_empty(), "should parse something");
+    }
+
+    #[test]
+    fn parse_triple_nested_bullet_list() {
+        let markdown = "intro\n\n- item 1\n  - sub a\n    - sub sub x\n    - sub sub y\n  - sub b\n- item 2\n\nafter all";
+        let blocks = parse_markdown_blocks(markdown);
+
+        // Should have: paragraph, bullet list, paragraph
+        assert_eq!(
+            blocks.len(),
+            3,
+            "expected 3 top-level blocks (paragraph, list, paragraph). Got: {blocks:#?}"
+        );
+        assert!(
+            matches!(blocks[2], MarkdownBlock::Paragraph(_)),
+            "third block should be paragraph 'after all'. Got: {:?}",
+            blocks[2]
+        );
+    }
+
+    #[test]
+    fn parse_list_with_empty_items() {
+        // List items with no content between them
+        let markdown = "- \n- item\n- \n\nafter";
+        let blocks = parse_markdown_blocks(markdown);
+        assert!(
+            blocks.len() >= 2,
+            "expected list + paragraph after. Got: {blocks:#?}"
+        );
+    }
+
+    #[test]
+    fn parse_list_item_followed_by_thematic_break() {
+        let markdown = "- item 1\n  - sub a\n\n---\n\nafter hr";
+        let blocks = parse_markdown_blocks(markdown);
+        // Should have: list, thematic break, paragraph
+        assert_eq!(
+            blocks.len(),
+            3,
+            "expected list, hr, paragraph. Got: {blocks:#?}"
+        );
+        assert!(
+            matches!(blocks[1], MarkdownBlock::ThematicBreak),
+            "expected thematic break as second block. Got: {:?}",
+            blocks[1]
+        );
+        assert!(
+            matches!(blocks[2], MarkdownBlock::Paragraph(_)),
+            "expected paragraph 'after hr' as third block. Got: {:?}",
+            blocks[2]
+        );
+    }
+
+    #[test]
+    fn html_events_are_not_silently_consumed() {
+        // Block-level HTML in markdown
+        let markdown = "before\n\n<div>html block</div>\n\nafter";
+        let blocks = parse_markdown_blocks(markdown);
+        // If Event::Html is consumed by catch-all, "html block" text disappears
+        let rendered = markdown_to_debug_string(&blocks);
+        assert!(
+            rendered.contains("html block"),
+            "HTML block content was consumed by catch-all! Blocks: {blocks:#?}"
+        );
+        assert!(
+            rendered.contains("after"),
+            "content after HTML block was lost! Rendered: {rendered}"
+        );
+    }
+
+    #[test]
+    fn inline_html_not_silently_consumed() {
+        let markdown = "prefix <span>inline html</span> suffix";
+        let blocks = parse_markdown_blocks(markdown);
+        let rendered = markdown_to_debug_string(&blocks);
+        assert!(
+            rendered.contains("inline html") || rendered.contains("<span>"),
+            "inline HTML was consumed! Blocks: {blocks:#?}"
+        );
+    }
+
+    #[test]
+    fn html_comment_not_breaking_parse() {
+        // HTML comments should not break the parsing of surrounding content
+        let markdown = "<!-- @Author: XPectuer -->\n# FAQ\n\n- item 1\n  - sub a\n\nafter";
+        let blocks = parse_markdown_blocks(markdown);
+        let rendered = markdown_to_debug_string(&blocks);
+        assert!(
+            rendered.contains("FAQ"),
+            "content after HTML comment was lost! Rendered: {rendered}"
+        );
+        assert!(
+            rendered.contains("after"),
+            "content after list following HTML comment was lost! Rendered: {rendered}"
+        );
+    }
+
+    fn markdown_to_debug_string(blocks: &[MarkdownBlock]) -> String {
+        blocks
+            .iter()
+            .map(|b| format!("{b:?}"))
+            .collect::<Vec<_>>()
+            .join(" | ")
     }
 
     #[test]
