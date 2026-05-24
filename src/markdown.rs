@@ -252,15 +252,6 @@ fn parse_block_sequence<'a>(
                 blocks.push(MarkdownBlock::ThematicBreak);
                 *index += 1;
             }
-            Event::Text(text) => {
-                blocks.push(MarkdownBlock::Paragraph(vec![InlineSpan::Text(
-                    text.to_string(),
-                )]));
-                *index += 1;
-            }
-            Event::SoftBreak | Event::HardBreak => {
-                *index += 1;
-            }
             Event::Html(html) => {
                 // Skip HTML comments; render other block-level HTML as paragraph
                 let html_str = html.to_string();
@@ -276,6 +267,9 @@ fn parse_block_sequence<'a>(
                     code: math.to_string(),
                 });
                 *index += 1;
+            }
+            e if is_loose_inline_event(e) => {
+                blocks.push(MarkdownBlock::Paragraph(parse_loose_inlines(events, index)));
             }
             _ => {
                 *index += 1;
@@ -367,15 +361,6 @@ fn parse_list_item<'a>(events: &[Event<'a>], index: &mut usize) -> ListItem {
                 blocks.push(MarkdownBlock::ThematicBreak);
                 *index += 1;
             }
-            Event::Text(text) => {
-                blocks.push(MarkdownBlock::Paragraph(vec![InlineSpan::Text(
-                    text.to_string(),
-                )]));
-                *index += 1;
-            }
-            Event::SoftBreak | Event::HardBreak => {
-                *index += 1;
-            }
             Event::Html(html) => {
                 let html_str = html.to_string();
                 let trimmed = html_str.trim();
@@ -390,6 +375,9 @@ fn parse_list_item<'a>(events: &[Event<'a>], index: &mut usize) -> ListItem {
                     code: math.to_string(),
                 });
                 *index += 1;
+            }
+            e if is_loose_inline_event(e) => {
+                blocks.push(MarkdownBlock::Paragraph(parse_loose_inlines(events, index)));
             }
             _ => {
                 *index += 1;
@@ -636,6 +624,111 @@ fn collect_code_block<'a>(events: &[Event<'a>], index: &mut usize) -> String {
     }
 
     code
+}
+
+/// True when pulldown-cmark emits an inline event outside of a Paragraph container.
+/// These need to be collected into a synthetic Paragraph.
+fn is_loose_inline_event(event: &Event<'_>) -> bool {
+    matches!(
+        event,
+        Event::Text(_)
+            | Event::Code(_)
+            | Event::SoftBreak
+            | Event::HardBreak
+            | Event::TaskListMarker(_)
+            | Event::Start(Tag::Emphasis)
+            | Event::Start(Tag::Strong)
+            | Event::Start(Tag::Strikethrough)
+            | Event::Start(Tag::Link { .. })
+            | Event::Start(Tag::Image { .. })
+            | Event::InlineHtml(_)
+            | Event::FootnoteReference(_)
+            | Event::InlineMath(_)
+    )
+}
+
+/// Collect consecutive inline events into spans, stopping at any block-level event.
+/// Used when pulldown-cmark emits bare inline events inside a list item or block context.
+fn parse_loose_inlines<'a>(events: &[Event<'a>], index: &mut usize) -> Vec<InlineSpan> {
+    let mut spans = Vec::new();
+
+    while *index < events.len() {
+        match &events[*index] {
+            Event::Text(text) => {
+                push_text(&mut spans, text);
+                *index += 1;
+            }
+            Event::Code(code) => {
+                spans.push(InlineSpan::Code(code.to_string()));
+                *index += 1;
+            }
+            Event::SoftBreak | Event::HardBreak => {
+                push_text(&mut spans, " ");
+                *index += 1;
+            }
+            Event::TaskListMarker(is_checked) => {
+                push_text(&mut spans, if *is_checked { "[x] " } else { "[ ] " });
+                *index += 1;
+            }
+            Event::Start(Tag::Emphasis) => {
+                *index += 1;
+                spans.push(InlineSpan::Emphasis(collect_inline_text(
+                    events,
+                    index,
+                    TagEnd::Emphasis,
+                )));
+            }
+            Event::Start(Tag::Strong) => {
+                *index += 1;
+                spans.push(InlineSpan::Strong(collect_inline_text(
+                    events,
+                    index,
+                    TagEnd::Strong,
+                )));
+            }
+            Event::Start(Tag::Strikethrough) => {
+                *index += 1;
+                spans.push(InlineSpan::Strikethrough(collect_inline_text(
+                    events,
+                    index,
+                    TagEnd::Strikethrough,
+                )));
+            }
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                let destination = dest_url.to_string();
+                *index += 1;
+                spans.push(InlineSpan::Link {
+                    label: collect_inline_text(events, index, TagEnd::Link),
+                    destination,
+                });
+            }
+            Event::Start(Tag::Image { .. }) => {
+                *index += 1;
+                let alt = collect_inline_text(events, index, TagEnd::Image);
+                if !alt.is_empty() {
+                    push_text(&mut spans, alt);
+                }
+            }
+            Event::InlineHtml(html) => {
+                let html_str = html.to_string();
+                if !html_str.trim().starts_with("<!--") {
+                    push_text(&mut spans, html_str);
+                }
+                *index += 1;
+            }
+            Event::FootnoteReference(label) => {
+                push_text(&mut spans, format!("[^{}]", label));
+                *index += 1;
+            }
+            Event::InlineMath(math) => {
+                spans.push(InlineSpan::Code(format!("${}$", math)));
+                *index += 1;
+            }
+            _ => break,
+        }
+    }
+
+    spans
 }
 
 fn code_block_language(kind: &CodeBlockKind<'_>) -> Option<String> {
@@ -1216,6 +1309,115 @@ See [docs](https://docs.rs).\n\n\
             .map(|b| format!("{b:?}"))
             .collect::<Vec<_>>()
             .join(" | ")
+    }
+
+    #[test]
+    fn parse_list_item_with_inline_code_not_in_paragraph() {
+        // pulldown-cmark emits bare Code/Text events inside list items
+        // without wrapping them in Start(Paragraph)/End(Paragraph) when
+        // inline formatting (like backtick code) is present.
+        let markdown = "- 优化 `str_replace` → 返回值变了\n";
+        let blocks = parse_markdown_blocks(markdown);
+        assert_eq!(
+            blocks,
+            vec![MarkdownBlock::BulletList(vec![ListItem {
+                checked: None,
+                blocks: vec![MarkdownBlock::Paragraph(vec![
+                    InlineSpan::Text("优化 ".into()),
+                    InlineSpan::Code("str_replace".into()),
+                    InlineSpan::Text(" → 返回值变了".into()),
+                ])],
+            }])],
+            "inline code inside list item must not be lost. Got: {blocks:#?}"
+        );
+    }
+
+    #[test]
+    fn parse_list_item_with_strong_emphasis_outside_paragraph() {
+        let markdown = "- `code` 自己的测试**通过了**\n";
+        let blocks = parse_markdown_blocks(markdown);
+        assert_eq!(
+            blocks,
+            vec![MarkdownBlock::BulletList(vec![ListItem {
+                checked: None,
+                blocks: vec![MarkdownBlock::Paragraph(vec![
+                    InlineSpan::Code("code".into()),
+                    InlineSpan::Text(" 自己的测试".into()),
+                    InlineSpan::Strong("通过了".into()),
+                ])],
+            }])],
+            "inline code and strong inside list item must be preserved. Got: {blocks:#?}"
+        );
+    }
+
+    #[test]
+    fn parse_full_slide_with_inline_code_and_blockquote_after_image() {
+        let markdown = "\
+# 测试 = 模具\n\
+\n\
+**uigen 进化史 v3**：核心模块加测试，precommit hook 挂测试。\n\
+\n\
+## 痛点：改 A 修 B 炸 C\n\
+\n\
+uigen 实例：\n\
+- 优化 `str_replace` → 返回值从 `{ content }` 变成 `{ content, changed }`\n\
+- `str-replace.ts` 自己的测试**通过了**\n\
+- 但 `generation.tsx` 解析返回值报错 → 全部组件白屏\n\
+\n\
+→ 典型**回归**。AI 精确执行任务，但不会主动检查\"我改的会影响其他模块吗\"。\n\
+\n\
+> AI 改代码快 10 倍，埋 bug 也快 10 倍。测试比传统开发更重要。\n";
+        let blocks = parse_markdown_blocks(markdown);
+
+        // The last two blocks should be: paragraph with "→ 典型..." and blockquote
+        assert!(
+            blocks.len() >= 7,
+            "expected at least 7 blocks, got {blocks:#?}"
+        );
+
+        // Find the blockquote
+        let has_blockquote = blocks.iter().any(|b| matches!(b, MarkdownBlock::Quote(_)));
+        assert!(
+            has_blockquote,
+            "blockquote 'AI 改代码快 10 倍...' was lost! Blocks: {blocks:#?}"
+        );
+
+        // Find the paragraph with "我改的会影响其他模块吗"
+        let rendered = markdown_to_debug_string(&blocks);
+        assert!(
+            rendered.contains("我改的会影响其他模块吗"),
+            "paragraph text '我改的会影响其他模块吗' was lost! Rendered: {rendered}"
+        );
+        assert!(
+            rendered.contains("AI 改代码快 10 倍"),
+            "blockquote text 'AI 改代码快 10 倍' was lost! Rendered: {rendered}"
+        );
+        assert!(
+            rendered.contains("str_replace"),
+            "inline code 'str_replace' was lost! Rendered: {rendered}"
+        );
+    }
+
+    #[test]
+    fn parse_list_item_with_link_and_strikethrough() {
+        let markdown = "- see [docs](https://example.com) and ~~old~~\n";
+        let blocks = parse_markdown_blocks(markdown);
+        assert_eq!(
+            blocks,
+            vec![MarkdownBlock::BulletList(vec![ListItem {
+                checked: None,
+                blocks: vec![MarkdownBlock::Paragraph(vec![
+                    InlineSpan::Text("see ".into()),
+                    InlineSpan::Link {
+                        label: "docs".into(),
+                        destination: "https://example.com".into(),
+                    },
+                    InlineSpan::Text(" and ".into()),
+                    InlineSpan::Strikethrough("old".into()),
+                ])],
+            }])],
+            "link and strikethrough inside list item must be preserved. Got: {blocks:#?}"
+        );
     }
 
     #[test]
